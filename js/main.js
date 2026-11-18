@@ -298,7 +298,7 @@ function frame(now) {
 }
 setView('outside', false);
 document.getElementById('loading').classList.add('gone');
-setTimeout(() => (document.getElementById('hint').style.opacity = 0), 6000);
+setTimeout(() => { const h = document.getElementById('hint'); if (h) h.style.opacity = 0; }, 6000);
 requestAnimationFrame(frame);
 
 // For automated checks

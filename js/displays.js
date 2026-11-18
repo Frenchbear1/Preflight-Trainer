@@ -95,7 +95,7 @@ function drawAll(s, { pfd, g5, gnx, gnc }) {
       const ok = powered('cb_engsensor');
       arcGauge(c, ew / 2, 92, 66, ok ? e.rpm : 0, 0, 2800, [[500, 2700, '#1fbf4a'], [2700, 2800, '#e02020']], 'RPM', ok ? String(Math.round(e.rpm / 10) * 10) : '---');
       const rows = [
-        ['FUEL FLOW', e.running ? (e.rpm / 2400) * 9.5 : 0, 0, 20, x => x.toFixed(1) + ' GPH', [[0, 20, '#1fbf4a']]],
+        ['FF', e.running ? (e.rpm / 2400) * 9.5 : 0, 0, 20, x => x.toFixed(1) + ' GPH', [[0, 20, '#1fbf4a']]],
         ['OIL PRES', e.oilPress, 0, 115, x => Math.round(x) + ' PSI', [[0, 25, '#e02020'], [25, 55, '#f0c020'], [55, 95, '#1fbf4a'], [95, 115, '#e02020']]],
         ['OIL TEMP', e.oilTemp * 9 / 5 + 32, 40, 260, x => Math.round(x) + ' °F', [[40, 100, '#f0c020'], [100, 245, '#1fbf4a'], [245, 260, '#e02020']]],
         ['FUEL L', s.fuel.L, 0, 25, x => x.toFixed(0) + ' GAL', [[0, 3, '#e02020'], [3, 8, '#f0c020'], [8, 25, '#1fbf4a']]],
