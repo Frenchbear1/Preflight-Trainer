@@ -1,7 +1,7 @@
 // What each part does when you tap or drag it, and what the info card offers.
 import { state, set, emit, casMessages, note, powered } from './state.js';
 import { BREAKERS, SWITCHES, INFO } from './data.js';
-import { click } from './audio.js';
+import { click, tone } from './audio.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const ACTIONS = {};
@@ -80,7 +80,7 @@ ACTIONS.dimPanel = slider('dimPanel', { name: 'Panel brightness', fmt: v => Math
 ACTIONS.heat = slider('heat', { name: 'Cabin heat', axis: 'x', fmt: v => (v < 0.05 ? 'OFF' : v > 0.95 ? 'ON' : Math.round(v * 100) + '%') });
 ACTIONS.defrost = slider('defrost', { name: 'Defrost', axis: 'x', fmt: v => (v < 0.05 ? 'OFF' : v > 0.95 ? 'ON' : Math.round(v * 100) + '%') });
 ACTIONS.pitchTrim = slider('pitchTrim', { name: 'Stabilator trim', min: -1, max: 1, sens: 0.003, fmt: v => (Math.abs(v) < 0.05 ? 'NEUTRAL' : v > 0 ? 'Nose up ' + Math.round(v * 100) + '%' : 'Nose down ' + Math.round(-v * 100) + '%') });
-ACTIONS.pitchTrim.options = () => [{ label: 'Neutral', do: () => set('pitchTrim', 0), selected: () => Math.abs(state.pitchTrim) < 0.05 }, { label: 'Takeoff', do: () => set('pitchTrim', 0.12) }, { range: true, label: 'Trim', min: -1, max: 1, step: 0.02, value: () => state.pitchTrim, set: v => set('pitchTrim', v) }];
+ACTIONS.pitchTrim.options = () => [{ label: 'Neutral', do: () => set('pitchTrim', 0), selected: () => Math.abs(state.pitchTrim) < 0.05 }, { label: 'Takeoff', do: () => set('pitchTrim', 0.1), selected: () => Math.abs(state.pitchTrim - 0.1) < 0.04 }, { range: true, label: 'Trim', min: -1, max: 1, step: 0.02, value: () => state.pitchTrim, set: v => set('pitchTrim', v) }];
 ACTIONS.rudderTrim = slider('rudderTrim', { name: 'Rudder trim', min: -1, max: 1, axis: 'x', sens: 0.003, fmt: v => (Math.abs(v) < 0.05 ? 'NEUTRAL' : v > 0 ? 'Right ' + Math.round(v * 100) + '%' : 'Left ' + Math.round(-v * 100) + '%') });
 ACTIONS.rudderTrim.options = () => [{ label: 'Neutral', do: () => set('rudderTrim', 0), selected: () => Math.abs(state.rudderTrim) < 0.05 }, { range: true, label: 'Rudder trim', min: -1, max: 1, step: 0.02, value: () => state.rudderTrim, set: v => set('rudderTrim', v) }];
 
@@ -125,10 +125,29 @@ ACTIONS.yoke = {
     { label: 'Neutral', do: () => { state.yokePitch = 0; state.yokeRoll = 0; emit('yoke'); } },
   ],
 };
+ACTIONS.gmc = {
+  state: () => (!powered('cb_autopilot') ? 'OFF' : state.avionics.pftT < 30 ? 'Preflight test running' : state.ap.engaged ? 'AP ENGAGED' : 'AP off'),
+  tap: () => { if (powered('cb_autopilot') && state.avionics.pftT >= 30) { state.ap.engaged = !state.ap.engaged; if (state.ap.engaged) note('apEngaged'); else state.ap.discFlash = 2; emit('ap'); click(); } },
+  options: () => [{ label: state.ap.engaged ? 'AP off' : 'Press AP', do: () => ACTIONS.gmc.tap() }],
+};
+ACTIONS.apDisc = {
+  name: () => 'A/P DISC / trim interrupt',
+  state: () => (state.ap.engaged ? 'Autopilot engaged' : 'Autopilot off'),
+  tap: () => { if (state.ap.engaged) { state.ap.engaged = false; state.ap.discFlash = 2.5; note('apDisc'); const t = tone(1000, 0.05); setTimeout(() => t.stop(), 900); } click(); emit('ap'); },
+};
+INFO.apDisc = { name: 'A/P DISC button', ref: 'POH 4.5g', text: 'Red button on the left horn of the pilot wheel. Disconnects the autopilot with an audio alert.' };
+ACTIONS.door = {
+  state: () => (state.ext.door === 'latched' ? 'CLOSED AND LATCHED' : 'OPEN'),
+  tap: () => { state.ext.door = state.ext.door === 'latched' ? 'open' : 'latched'; emit('ext'); click(); },
+  options: () => [{ label: state.ext.door === 'latched' ? 'Open' : 'Close and latch', do: () => ACTIONS.door.tap() }],
+};
 ACTIONS.pedals = {
   state: () => (Math.abs(state.rudder) < 0.05 ? 'Neutral' : state.rudder > 0 ? 'Right rudder' : 'Left rudder'),
   drag: { start: () => state.rudder, move: (dx, dy, v0) => set('rudder', clamp(v0 + dx * 0.006, -1, 1)) },
-  options: () => [{ label: 'Full left', do: () => set('rudder', -1) }, { label: 'Neutral', do: () => set('rudder', 0) }, { label: 'Full right', do: () => set('rudder', 1) }],
+  options: () => [
+    { label: 'Full left', do: () => set('rudder', -1) }, { label: 'Neutral', do: () => set('rudder', 0) }, { label: 'Full right', do: () => set('rudder', 1) },
+    { label: 'Toe brakes (1 s)', do: () => { state.toeBrake = true; note('brakesPressed'); setTimeout(() => (state.toeBrake = false), 1000); } },
+  ],
 };
 
 // Displays
@@ -137,7 +156,7 @@ ACTIONS.pfd = {
   tap: hit => { if (hit?.screen && hit.uv && displays?.touch('pfd', hit.uv)) click('knob'); },
 };
 ACTIONS.gnx = { state: () => (powered('cb_gpsxpdr') ? 'ON' : 'OFF'), tap: hit => { if (hit?.screen && hit.uv && displays?.touch('gnx', hit.uv)) click('knob'); } };
-['g5', 'gnc', 'gmc', 'hobbs', 'usb'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
+['g5', 'gnc', 'hobbs', 'usb'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
 
 // ---------------- Exterior ----------------
 const remove = (key, label) => ({

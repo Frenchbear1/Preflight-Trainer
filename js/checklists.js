@@ -1,7 +1,7 @@
 // Checklists. Item order follows POH VB-2960 Section 4.5a (preflight). Wording is condensed
 // to the item and the action. A step completes when its check() becomes true (the pilot did it),
 // or, for look-only items, when the pilot taps the part or presses "Checked".
-import { state, powered, casMessages, stallWarning } from './state.js';
+import { state, powered, casMessages, stallWarning, engineDerived } from './state.js';
 
 const sw = new Proxy({}, { get: (_, k) => state.sw[k] }); // always the current switch set, even after a reset
 const allSwitchesOff = () => !['batt', 'altr', 'fuelPump', 'pitotHeat', 'strobe', 'nav', 'landing', 'ventFan', 'mapLight', 'magL', 'magR'].some(k => sw[k]);
@@ -12,7 +12,7 @@ const hasCas = t => casMessages().some(m => m.t === t);
 const IN = 'in', RW = [1.0, 0.55, 0.25], NOSE = [0.25, 0.45, -1], LW = [-1.0, 0.55, 0.25], TAIL = [0.55, 0.5, 1], UNDER_R = [0.8, -0.05, -0.6], UNDER_L = [-0.8, -0.05, -0.6];
 
 export const PREFLIGHT = {
-  id: 'preflight', title: 'Preflight', ref: 'POH 4.5a',
+  id: 'preflight', title: 'Preflight walk-around', ref: 'POH 4.5a', desc: 'Cockpit, right wing, nose, left wing, tail',
   sections: [
     { title: 'Cockpit', steps: [
       { t: 'Control wheel', a: 'RELEASE RESTRAINT', target: 'controlLock', view: IN, check: () => !state.controlLock, tip: 'Tap the seat belt wrapped around the wheel.' },
@@ -99,10 +99,192 @@ export const PREFLIGHT = {
   ],
 };
 
-export const CHECKLISTS = [PREFLIGHT];
+const fl = () => state.fl, rpm = () => state.engine.rpm, inAir = () => !state.fl.onGround;
+const altMSL = () => state.fieldElev + state.fl.alt / 0.3048;
+const phaseIs = (...p) => p.includes(state.fl.phase);
+const allBreakersIn = () => Object.values(state.breakers).every(Boolean);
+const setAlt = () => Math.abs(state.baro - state.atis.alt) < 0.005;
+const PFD = 'pfd';
+
+export const NORMAL = {
+  id: 'normal', title: 'Start, taxi, fly and park', ref: 'POH 4.5c–4.5q', desc: 'Before start through mooring, with a flight out and back',
+  start: () => { // begin where the walk-around left the airplane: preflighted, ready to board
+    Object.assign(state.ext, { pitotCover: false, chockL: false, chockR: false, chockN: false, tiedownL: false, tiedownR: false, tiedownT: false, door: 'open' });
+    state.controlLock = false; state.flaps = 10; state.pitchTrim = 0; state.rudderTrim = 0;
+  },
+  sections: [
+    { title: 'Before starting engine', steps: [
+      { t: 'Flaps', a: 'RETRACT', target: 'flaps', view: IN, check: () => state.flaps === 0 },
+      { t: 'Door', a: 'CLOSED AND SECURE', target: 'door', view: [0.9, 0.4, -0.3], check: () => state.ext.door === 'latched', tip: 'Tap the cabin door outline on the right side to close and latch it.' },
+      { t: 'Seats', a: 'ADJUSTED AND LOCKED', target: 'yoke', view: IN, look: true },
+      { t: 'Seat belts and harness', a: 'FASTEN, CHECK INERTIA REEL', target: 'yoke', view: IN, look: true, tip: 'Pull the shoulder strap sharply; the reel should lock.' },
+      { t: 'Fuel selector', a: 'DESIRED TANK', target: 'fuelSel', view: IN, check: () => state.fuelSel !== 'OFF' },
+      { t: 'Parking brake', a: 'SET', target: 'parkBrake', view: IN, check: () => state.parkBrake },
+      { t: 'Circuit breakers', a: 'CHECK IN', target: 'cb_com1', view: IN, check: allBreakersIn, tip: 'A popped breaker shows a white band.' },
+      { t: 'ALT AIR', a: 'CLOSE', target: 'altAir', view: IN, check: () => state.altAir === 'CLOSE' },
+      { t: 'Alternate static source', a: 'OFF', target: 'altStatic', view: IN, check: () => !state.altStatic },
+      { t: 'All electrical switches', a: 'OFF', target: 'batt', view: IN, check: () => !['altr', 'fuelPump', 'pitotHeat', 'strobe', 'nav', 'landing', 'ventFan', 'mapLight'].some(k => sw[k]) },
+      { t: 'Battery master', a: 'OFF', target: 'batt', view: IN, check: () => !sw.batt },
+    ] },
+    { title: 'Engine start (cold)', steps: [
+      { t: 'Throttle', a: '½ INCH OPEN', target: 'throttle', view: IN, check: () => state.throttle > 0.05 && state.throttle < 0.25, tip: 'Card button "½ in open", or drag the black knob forward a little.' },
+      { t: 'Battery master', a: 'ON', target: 'batt', view: IN, check: () => sw.batt },
+      { t: 'ALTR switch', a: 'ON', target: 'altr', view: IN, check: () => sw.altr },
+      { t: 'Left and right mags', a: 'ON', target: 'magL', view: IN, check: () => sw.magL && sw.magR },
+      { t: 'Fuel pump', a: 'ON', target: 'fuelPump', view: IN, check: () => sw.fuelPump },
+      { t: 'Strobe lights', a: 'ON', target: 'strobe', view: IN, check: () => sw.strobe },
+      { t: 'Mixture', a: 'PRIME, THEN IDLE CUT-OFF', target: 'mixture', view: IN, check: () => state.events.primed && state.mixture < 0.03, tip: 'Push the red knob full rich for about three seconds with the pump on, then pull it back to cut-off.' },
+      { t: 'PFD annunciations', a: 'CONSIDER', target: PFD, view: IN, look: true },
+      { t: 'Propeller', a: 'CLEAR', target: 'prop', view: [0.2, 0.5, -1], far: 5, look: true, tip: 'Look all around the propeller, then call "Clear prop!"' },
+      { t: 'ENGINE START', a: 'ENGAGE', target: 'start', view: IN, check: () => state.engine.running, tip: 'Press and hold the button. Let go when the engine fires. Limit cranking to 10 seconds.' },
+      { t: 'Mixture', a: 'ADVANCE', target: 'mixture', view: IN, check: () => state.engine.running && state.mixture > 0.9, tip: 'Within a few seconds of the engine firing, or it will stop.' },
+      { t: 'Throttle', a: 'ADJUST', target: 'throttle', view: IN, check: () => state.engine.running && rpm() > 800 && rpm() < 1200, tip: '800 to 1,200 RPM.' },
+      { t: 'Oil pressure', a: 'CHECK', target: PFD, view: IN, check: () => state.engine.oilPress > 25, tip: 'Positive within 30 seconds, or shut down. Also check ALT AMPS shows a charge.' },
+    ] },
+    { title: 'Before taxiing', steps: [
+      { t: 'Warm-up throttle', a: '800 TO 1,200 RPM', target: 'throttle', view: IN, check: () => state.engine.running && rpm() >= 800 && rpm() <= 1200 },
+      { t: 'Databases', a: 'VERIFY CURRENCY', target: PFD, view: IN, check: () => state.avionics.dbViewed, tip: 'On the G3X database page, check the navigation cycle is current, then tap Continue.' },
+      { t: 'CAS messages', a: 'CONSIDER ANY SHOWING', target: PFD, view: IN, look: true },
+      { t: 'PFD annunciations', a: 'CONSIDER ANY SHOWING', target: PFD, view: IN, look: true },
+      { t: 'Fuel Calc (ENG page)', a: 'ENTER FUEL', target: PFD, view: IN, check: () => state.avionics.fuelSet, tip: 'Tap ENG at the bottom of the PFD, then the Fuel Calc tab, then Full 48.0.' },
+      { t: 'Weight and balance (MENU)', a: 'ENTER WEIGHTS', target: PFD, view: IN, check: () => state.avionics.wbSet, tip: 'Tap W&B and set the pilot, passengers and fuel. Check IN RANGE.' },
+      { t: 'System messages', a: 'CONSIDER', target: PFD, view: IN, look: true },
+      { t: 'Lights', a: 'AS REQUIRED', target: 'nav', view: IN, look: true },
+      { t: 'Ventilation, heat, defroster', a: 'AS DESIRED', target: 'heat', view: IN, look: true },
+      { t: 'COM/NAV radios and avionics', a: 'CHECK AND SET', target: 'gnx', view: IN, check: () => state.avionics.gnxPage === 'map', tip: 'On the GNX 375 tap Continue on the database page and again on Instrument Test.' },
+      { t: 'Autopilot', a: 'VERIFY PREFLIGHT TEST DONE', target: PFD, view: IN, check: () => powered('cb_autopilot') && state.avionics.pftT >= 30, tip: 'The white PFT box at the top of the PFD clears when the test passes.' },
+      { t: 'Standby instrument', a: 'ON, NO RED X', target: 'g5', view: IN, check: () => state.avionics.g5Boot > 9 },
+      { t: 'Altimeter and standby altimeter', a: 'SET', target: PFD, view: IN, check: setAlt, tip: 'ATIS: wind calm, altimeter 30.06. Tap the left half of the blue baro box to lower it, the right half to raise it. The G5 follows.' },
+      { t: 'Passenger briefing', a: 'COMPLETE', target: 'yoke', view: IN, look: true },
+      { t: 'Parking brake', a: 'RELEASE', target: 'parkBrake', view: IN, check: () => !state.parkBrake, tip: 'The airplane will not move until you add power.' },
+    ] },
+    { title: 'Taxiing', steps: [
+      { t: 'Taxi area', a: 'CLEAR', target: 'prop', view: [0.5, 0.6, -1], far: 9, look: true },
+      { t: 'Parking brake', a: 'RELEASED', target: 'parkBrake', view: IN, check: () => !state.parkBrake },
+      { t: 'Throttle', a: 'APPLY SLOWLY', target: 'throttle', view: IN, check: () => state.events.taxiing, tip: 'About 1,000–1,100 RPM gets it rolling. The airplane follows taxiway A to the run-up pad; you control the speed.' },
+      { t: 'Brakes', a: 'CHECK', target: 'pedals', view: IN, check: () => state.events.brakesTested, tip: 'While rolling, press the Brakes button in the flight panel (or the pedals card).' },
+      { t: 'Steering', a: 'CHECK', target: 'pedals', view: IN, check: () => state.events.steerTested, tip: 'While rolling, drag the rudder pedals left and right.' },
+    ] },
+    { title: 'Ground check (run-up)', steps: [
+      { t: 'Parking brake', a: 'SET', target: 'parkBrake', view: IN, check: () => state.parkBrake && phaseIs('runup'), tip: 'The airplane stops on the run-up pad. Set the brake there.' },
+      { t: 'Throttle', a: '2,000 RPM', target: 'throttle', view: IN, check: () => rpm() > 1940 && rpm() < 2060, tip: 'Watch the RPM on the engine strip.' },
+      { t: 'Left and right mag check', a: 'MAX DROP 175, MAX DIFF 50', target: 'magL', view: IN, check: () => state.events.magCheckL && state.events.magCheckR && sw.magL && sw.magR, tip: 'Left mag OFF, note the drop, back ON. Then the right. No more than 10 seconds on one mag.' },
+      { t: 'Oil temperature', a: 'CHECK', target: PFD, view: IN, look: true },
+      { t: 'Oil pressure', a: 'CHECK', target: PFD, view: IN, look: true },
+      { t: 'VOLTS', a: 'CHECK BUS (28 ± 1)', target: PFD, view: IN, check: () => state.elec.volts > 27 && state.elec.volts < 29 },
+      { t: 'ALT AMPS', a: 'CHECK NORMAL', target: PFD, view: IN, look: true },
+      { t: 'ALT AIR', a: 'CHECK FOR RPM DROP', target: 'altAir', view: IN, check: () => state.events.altAirCheck && state.altAir === 'CLOSE', tip: 'Open it, see a small drop, close it again. The air is unfiltered.' },
+      { t: 'Fuel pump', a: 'OFF', target: 'fuelPump', view: IN, check: () => !sw.fuelPump && state.engine.running, tip: 'Verify the engine keeps running on the engine-driven pump.' },
+      { t: 'Engine operation', a: 'VERIFY', target: PFD, view: IN, look: true },
+      { t: 'Throttle', a: 'RETARD', target: 'throttle', view: IN, check: () => rpm() < 1150 },
+      { t: 'Autopilot', a: 'ENGAGE', target: 'gmc', view: IN, check: () => state.events.apEngaged, tip: 'Press AP on the GMC 507.' },
+      { t: 'Flight controls', a: 'CHECK, CAN OVERPOWER', target: 'yoke', view: IN, look: true },
+      { t: 'A/P DISC', a: 'PRESS', target: 'apDisc', view: IN, check: () => state.events.apDisc, tip: 'Red button on the left horn of your wheel. Listen for the disconnect tone.' },
+    ] },
+    { title: 'Before takeoff', steps: [
+      { t: 'Battery master', a: 'VERIFY ON', target: 'batt', view: IN, check: () => sw.batt },
+      { t: 'ALTR switch', a: 'VERIFY ON', target: 'altr', view: IN, check: () => sw.altr },
+      { t: 'Fuel pump', a: 'ON', target: 'fuelPump', view: IN, check: () => sw.fuelPump },
+      { t: 'Left and right mags', a: 'VERIFY ON', target: 'magL', view: IN, check: () => sw.magL && sw.magR },
+      { t: 'Flight instruments', a: 'CHECK', target: PFD, view: IN, look: true },
+      { t: 'Standby instrument', a: 'CHECK', target: 'g5', view: IN, look: true },
+      { t: 'CAS messages and annunciations', a: 'CONSIDER', target: PFD, view: IN, look: true },
+      { t: 'Fuel selector', a: 'PROPER TANK', target: 'fuelSel', view: IN, check: () => state.fuelSel !== 'OFF' },
+      { t: 'Engine indications', a: 'CHECK', target: PFD, view: IN, look: true },
+      { t: 'ALT AIR', a: 'CLOSE', target: 'altAir', view: IN, check: () => state.altAir === 'CLOSE' },
+      { t: 'Mixture', a: 'SET', target: 'mixture', view: IN, check: () => state.mixture > 0.95, tip: 'Full rich at this field elevation.' },
+      { t: 'Seat backs', a: 'ERECT', target: 'yoke', view: IN, look: true },
+      { t: 'Seats, belts and harness', a: 'LOCKED AND FASTENED', target: 'yoke', view: IN, look: true },
+      { t: 'Empty seats', a: 'BELTS SECURELY FASTENED', target: 'yoke', view: IN, look: true },
+      { t: 'Flaps', a: 'SET', target: 'flaps', view: IN, check: () => state.flaps === 0, tip: 'Up for a normal takeoff (25° for short field).' },
+      { t: 'Stabilator and rudder trim', a: 'SET', target: 'pitchTrim', view: IN, check: () => Math.abs(state.pitchTrim - 0.1) < 0.06 && Math.abs(state.rudderTrim) < 0.1, tip: 'Card button "Takeoff" on the trim wheel. Rudder trim neutral.' },
+      { t: 'Controls', a: 'FREE AND CORRECT', target: 'yoke', view: IN, look: true },
+      { t: 'Door', a: 'LATCHED', target: 'door', view: [0.9, 0.4, -0.3], check: () => state.ext.door === 'latched' },
+    ] },
+    { title: 'Takeoff', steps: [
+      { t: 'Runway 27', a: 'LINE UP', target: 'prop', view: [0.4, 0.5, -1], far: 9, check: () => phaseIs('lineup'), tip: 'Release the parking brake and add a little power: the airplane taxis to the hold-short line and stops. Check final is clear, then add power again to line up on 27.' },
+      { t: 'Flaps', a: 'UP', target: 'flaps', view: IN, check: () => state.flaps === 0 },
+      { t: 'Trim', a: 'SET', target: 'pitchTrim', view: IN, check: () => Math.abs(state.pitchTrim - 0.1) < 0.06 },
+      { t: 'Brakes', a: 'APPLY AND HOLD', target: 'pedals', view: IN, check: () => state.toeBrake || state.parkBrake, tip: 'Press Hold brakes in the flight panel.' },
+      { t: 'Throttle', a: 'FULL POWER', target: 'throttle', view: IN, check: () => state.throttle > 0.97, tip: 'Check the engine is smooth and oil pressure normal before letting go of the brakes.' },
+      { t: 'Brakes', a: 'RELEASE', target: 'pedals', view: IN, check: () => phaseIs('roll', 'climb') },
+      { t: 'Rotate at 60 KIAS', a: 'SMOOTHLY TO CLIMB ATTITUDE', target: 'yoke', view: IN, check: () => state.events.airborne, tip: 'At 60 knots drag the wheel aft (down on the screen) and hold it there.' },
+    ] },
+    { title: 'Climb', steps: [
+      { t: 'Best rate (flaps up)', a: '76 KIAS', target: PFD, view: IN, check: () => phaseIs('climb') && Math.abs(fl().ias - 76) < 4, look: true, tip: 'Best angle is 64 KIAS; 87 KIAS for an enroute climb. Speed ×4 in the flight panel shortens the wait.' },
+      { t: 'Fuel pump', a: 'OFF AT DESIRED ALTITUDE', target: 'fuelPump', view: IN, check: () => !sw.fuelPump && inAir() && altMSL() > 1300, tip: 'Above about 1,000 ft AGL (1,400 ft on the altimeter).' },
+    ] },
+    { title: 'Cruise', steps: [
+      { t: 'Level at 2,500 ft', a: 'WAIT', target: PFD, view: IN, check: () => phaseIs('cruise') },
+      { t: 'Power', a: 'SET (about 2,400 RPM for 75%)', target: 'throttle', view: IN, check: () => phaseIs('cruise', 'return') && rpm() > 2320 && rpm() < 2460 },
+      { t: 'Mixture', a: 'ADJUST', target: 'mixture', view: IN, look: true, tip: 'Optional below 5,000 ft at 75% or less. To try it: pull the red knob back slowly and watch EGT on the ENG page rise to a peak, then enrich until about 100 °F rich of peak. Leave it full rich if in doubt.' },
+      { t: 'Head back to the airport', a: 'TURN BACK', target: PFD, view: IN, check: () => phaseIs('return', 'descent', 'approach', 'final'), tip: 'Press "Turn back to the airport" in the flight panel. You will come back for a straight-in to runway 9.' },
+    ] },
+    { title: 'Descent', steps: [
+      { t: 'Throttle', a: '2,500 RPM', target: 'throttle', view: IN, check: () => inAir() && rpm() > 2440 && rpm() < 2560 },
+      { t: 'Airspeed', a: '122 KIAS', target: PFD, view: IN, look: true },
+      { t: 'Mixture', a: 'RICH', target: 'mixture', view: IN, check: () => state.mixture > 0.95 },
+    ] },
+    { title: 'Approach and landing', steps: [
+      { t: 'COM/NAV radios and avionics', a: 'CHECK AND SET', target: 'gnc', view: IN, look: true },
+      { t: 'Altimeter and standby', a: 'SET', target: PFD, view: IN, check: setAlt },
+      { t: 'Seat backs', a: 'ERECT', target: 'yoke', view: IN, look: true },
+      { t: 'Belts and harness', a: 'FASTENED AND ADJUSTED', target: 'yoke', view: IN, look: true },
+      { t: 'Armrests', a: 'STOWED', target: 'yoke', view: IN, look: true },
+      { t: 'Fuel pump', a: 'ON', target: 'fuelPump', view: IN, check: () => sw.fuelPump && inAir() },
+      { t: 'Fuel selector', a: 'PROPER TANK (FULLEST)', target: 'fuelSel', view: IN, check: () => state.fuelSel !== 'OFF' && state.fuel[state.fuelSel] >= Math.max(state.fuel.L, state.fuel.R) - 0.5 },
+      { t: 'Flaps', a: 'SET (102 KIAS MAX)', target: 'flaps', view: IN, check: () => inAir() && state.flaps > 0 && fl().ias <= 102, tip: 'Slow below 102 first (reduce power), then 10°, 25° and 40° on final.' },
+      { t: 'ALT AIR', a: 'AS REQUIRED', target: 'altAir', view: IN, check: () => state.altAir === 'CLOSE', tip: 'Closed unless there are signs of induction icing.' },
+      { t: 'Mixture', a: 'FULL RICH', target: 'mixture', view: IN, check: () => state.mixture > 0.95 },
+      { t: 'Landing light', a: 'AS REQUIRED', target: 'landing', view: IN, look: true },
+      { t: 'Parking brake', a: 'VERIFY OFF', target: 'parkBrake', view: IN, check: () => !state.parkBrake },
+      { t: 'Toe brakes', a: 'DEPRESS TO CHECK', target: 'pedals', view: IN, check: () => state.events.brakesPressed && inAir(), tip: 'Tap Toe brakes on the pedals card.' },
+      { t: 'Autopilot', a: 'DISCONNECT (ABOVE 200 FT AGL)', target: 'apDisc', view: IN, check: () => !state.ap.engaged },
+      { t: 'Final approach speed (flaps 40°)', a: '66 KIAS', target: PFD, view: IN, check: () => phaseIs('final', 'flare') && state.flaps === 40 && Math.abs(fl().ias - 66) < 5, look: true, tip: 'Flaps 40° and about 1,600–1,800 RPM holds 66 knots on the 3° path. Add power if slow, reduce if fast.' },
+      { t: 'Touchdown', a: 'MAIN WHEELS, THEN LOWER NOSE', target: PFD, view: IN, check: () => state.events.touchdown, tip: 'Throttle to idle in the flare. The flare is automatic.' },
+      { t: 'Braking', a: 'AS REQUIRED', target: 'pedals', view: IN, look: true, tip: 'Hold brakes to slow down; you exit at the taxiway near the middle of the runway.' },
+    ] },
+    { title: 'Go-around', optional: () => state.events.goaround, steps: [
+      { t: 'Mixture', a: 'FULL RICH', target: 'mixture', view: IN, check: () => state.mixture > 0.95 },
+      { t: 'Throttle', a: 'FULL OPEN', target: 'throttle', view: IN, check: () => state.throttle > 0.97 },
+      { t: 'Control wheel', a: 'BACK PRESSURE, POSITIVE CLIMB', target: 'yoke', view: IN, check: () => fl().vs > 200 },
+      { t: 'Flaps', a: 'RETRACT INCREMENTALLY', target: 'flaps', view: IN, check: () => state.flaps === 0, tip: '40 to 25 to 10 to up as the speed builds.' },
+    ] },
+    { title: 'After landing', steps: [
+      { t: 'Clear of the runway', a: 'WAIT', target: PFD, view: IN, check: () => phaseIs('taxi-back', 'parked') && state.fl.z > -60 },
+      { t: 'Flaps', a: 'RETRACT', target: 'flaps', view: IN, check: () => state.flaps === 0 },
+      { t: 'Fuel pump', a: 'OFF', target: 'fuelPump', view: IN, check: () => !sw.fuelPump },
+      { t: 'Strobe lights', a: 'AS REQUIRED', target: 'strobe', view: IN, look: true },
+      { t: 'Landing light', a: 'AS REQUIRED', target: 'landing', view: IN, look: true },
+    ] },
+    { title: 'Stopping engine', steps: [
+      { t: 'Taxi to parking', a: 'WAIT', target: PFD, view: IN, check: () => phaseIs('parked') && state.events.parkedBack, tip: 'Keep a little power on; the airplane stops on its spot.' },
+      { t: 'Parking brake', a: 'SET', target: 'parkBrake', view: IN, check: () => state.parkBrake },
+      { t: 'Flaps', a: 'RETRACT', target: 'flaps', view: IN, check: () => state.flaps === 0 },
+      { t: 'Fuel pump', a: 'OFF', target: 'fuelPump', view: IN, check: () => !sw.fuelPump },
+      { t: 'Electrical switches', a: 'OFF', target: 'ventFan', view: IN, check: () => !sw.pitotHeat && !sw.ventFan, tip: 'Pitot heat, vent fan and other equipment.' },
+      { t: 'ALTR switch', a: 'OFF', target: 'altr', view: IN, check: () => !sw.altr },
+      { t: 'Throttle', a: 'CLOSED', target: 'throttle', view: IN, check: () => state.throttle < 0.03 },
+      { t: 'Mixture', a: 'IDLE CUT-OFF', target: 'mixture', view: IN, check: () => state.mixture < 0.03 && !state.engine.running },
+      { t: 'Left and right mags', a: 'OFF', target: 'magL', view: IN, check: () => !sw.magL && !sw.magR },
+      { t: 'Interior lights (night)', a: 'OFF', target: 'mapLight', view: IN, check: () => !sw.mapLight },
+      { t: 'Exterior lights', a: 'OFF', target: 'nav', view: IN, check: () => !sw.nav && !sw.strobe && !sw.landing },
+      { t: 'Battery master', a: 'OFF', target: 'batt', view: IN, check: () => !sw.batt, tip: 'If the G5 stays on, hold its power button for five seconds.' },
+    ] },
+    { title: 'Mooring', steps: [
+      { t: 'Parking brake', a: 'AS REQUIRED', target: 'parkBrake', view: IN, look: true },
+      { t: 'Flaps', a: 'VERIFY RETRACTED', target: 'flaps', view: IN, check: () => state.flaps === 0 },
+      { t: 'Control wheel', a: 'SECURE WITH BELT', target: 'yoke', view: IN, check: () => state.controlLock, tip: 'Open the wheel card and tap "Put back" for the restraint, or use Parts > Control wheel restraint.' },
+      { t: 'Wheel chocks', a: 'IN PLACE', target: 'mainGearR', view: [0.9, 0.3, -0.6], far: 4, check: () => state.ext.chockL && state.ext.chockR && state.ext.chockN, tip: 'Open Parts and put back the chocks at each wheel.' },
+      { t: 'Tie-downs', a: 'SECURE', target: 'tiedownR', view: [0.9, 0.5, 0.4], far: 6, check: () => state.ext.tiedownL && state.ext.tiedownR && state.ext.tiedownT, tip: 'Both wings and the tail.' },
+    ] },
+  ],
+};
+
+export const CHECKLISTS = [PREFLIGHT, NORMAL];
 
 export function flatSteps(list) {
   const out = [];
-  list.sections.forEach((sec, si) => sec.steps.forEach((st, i) => out.push({ ...st, sec: sec.title, si, i, key: `${si}.${i}` })));
+  list.sections.forEach((sec, si) => sec.steps.forEach((st, i) => out.push({ ...st, sec: sec.title, si, i, key: `${si}.${i}`, optional: sec.optional })));
   return out;
 }

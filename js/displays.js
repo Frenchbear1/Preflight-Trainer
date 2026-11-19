@@ -1,7 +1,11 @@
 // Avionics screens for the trainer. These are original drawings: they follow the page order,
 // data fields and colour conventions described in the pilot's guides and the POH, but they are
 // not copies of the manufacturer's artwork. They are driven by the airplane state and respond to touch.
-import { casMessages, powered, busPowered, emit } from './state.js';
+import { casMessages, powered, busPowered, emit, engineDerived } from './state.js';
+
+// Indicated altitude: true altitude plus the altimeter setting error (1 inch ≈ 1,000 ft)
+const indAlt = s => s.fieldElev + s.fl.alt / 0.3048 + (s.baro - s.atis.alt) * 1000;
+const iasOf = s => (s.fl.onGround && s.fl.ias < 20 ? 0 : s.fl.ias);
 
 const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
 const C = { cyan: '#22d3ee', mag: '#e040fb', green: '#2fe06a', white: '#f4f6f8', grey: '#8b96a3', amber: '#ffcc00', panel: '#0a0e13', line: '#3a4654' };
@@ -110,9 +114,9 @@ function hbar(c, x, y, w, label, val, min, max, readout, bands, ok, h = 54) {
 }
 function eisStrip(c, x, w, H, s, ok) {
   c.fillStyle = '#05080b'; c.fillRect(x, 0, w, H); c.strokeStyle = C.line; c.lineWidth = 2; c.beginPath(); c.moveTo(x + w, 0); c.lineTo(x + w, H); c.stroke();
-  const e = s.engine, ff = e.running ? (e.rpm / 2400) * 9.5 : 0;
+  const e = s.engine, D = engineDerived(), ff = D.ff;
   dial(c, x + w / 2 - 6, 88, 56, e.rpm, 0, 3000, [[500, 2700, G], [2700, 2800, R]], 'RPM', String(Math.round(e.rpm / 10) * 10), ok);
-  const cht = 60 + (e.oilTemp - 15) * 1.9, egt = e.running ? 900 + e.rpm * 0.18 : 60 + (e.oilTemp - 15) * 2;
+  const cht = 60 + (e.oilTemp - 15) * 1.9 + (e.running ? Math.pow(e.rpm / 2700, 2) * 180 : 0), egt = D.egt;
   let y = 156;
   y = hbar(c, x + 14, y, w - 28, 'GPH', ff, 0, 20, ff.toFixed(1), [[0, 20, G]], ok);
   y = hbar(c, x + 14, y, w - 28, 'OIL PSI', e.oilPress, 0, 115, String(Math.round(e.oilPress)), [[0, 25, R], [25, 55, Y], [55, 95, G], [95, 115, R]], ok);
@@ -143,17 +147,19 @@ function g3xMain(c, s, B, now) {
   const px = eisW, pw = (split ? 612 : W) - eisW;
   const adahrs = powered('cb_adahrs') && av.adahrsT > 18;
   if (adahrs) {
-    attitude(c, px, 48, pw, H - 88, 2.5, 0);
+    attitude(c, px, 48, pw, H - 88, s.fl.pitch, s.fl.roll * Math.PI / 180);
     const tw = split ? 84 : 98;
-    tape(c, px + 10, 130, tw, 300, 0, 10, 'IAS', v => String(v), 'L');
-    tape(c, px + pw - tw - 34, 130, tw, 300, s.fieldElev, 100, 'ALT', v => String(v), 'R');
-    c.fillStyle = 'rgba(30,36,44,0.62)'; c.fillRect(px + pw - 32, 160, 26, 240); txt(c, '0', px + pw - 19, 280, 14, '#fff', 'center');
+    tape(c, px + 10, 130, tw, 300, iasOf(s), 10, 'IAS', v => String(v), 'L');
+    tape(c, px + pw - tw - 34, 130, tw, 300, indAlt(s), 100, 'ALT', v => String(v), 'R');
+    c.fillStyle = 'rgba(30,36,44,0.62)'; c.fillRect(px + pw - 32, 160, 26, 240);
+    { const vs = Math.max(-2000, Math.min(2000, s.fl.vs)), yv = 280 - vs / 2000 * 115; c.fillStyle = '#fff'; c.beginPath(); c.moveTo(px + pw - 32, yv); c.lineTo(px + pw - 8, yv - 9); c.lineTo(px + pw - 8, yv + 9); c.closePath(); c.fill();
+      if (Math.abs(vs) > 90) txt(c, String(Math.round(vs / 50) * 50), px + pw - 19, vs > 0 ? 150 : 412, 13, '#fff', 'center'); }
     const bx = px + pw - tw - 34, byy = 450;
     c.fillStyle = '#000'; c.strokeStyle = C.line; c.lineWidth = 2; c.fillRect(bx, byy, tw, 34); c.strokeRect(bx, byy, tw, 34);
     txt(c, s.baro.toFixed(2) + 'IN', bx + tw / 2, byy + 18, 19, C.cyan, 'center');
     B.push({ x: bx, y: byy - 6, w: tw / 2, h: 46, fn: () => { s.baro = Math.round((s.baro - 0.01) * 100) / 100; } });
     B.push({ x: bx + tw / 2, y: byy - 6, w: tw / 2, h: 46, fn: () => { s.baro = Math.round((s.baro + 0.01) * 100) / 100; } });
-    hsi(c, px + pw / 2, H + (split ? 40 : 60), split ? 150 : 175, 360);
+    hsi(c, px + pw / 2, H + (split ? 40 : 60), split ? 150 : 175, s.fl.hdg);
   } else {
     c.fillStyle = '#0b0f14'; c.fillRect(px, 48, pw, H - 88);
     if (powered('cb_adahrs')) txt(c, 'AHRS ALIGN: KEEP WINGS LEVEL', px + pw / 2, 120, 21, C.amber, 'center');
@@ -166,6 +172,8 @@ function g3xMain(c, s, B, now) {
     const bw = 170, bx = px + pw / 2 - bw / 2;
     c.fillStyle = 'rgba(0,0,0,0.85)'; c.fillRect(bx, 50, bw, 30); c.strokeStyle = C.line; c.lineWidth = 2; c.strokeRect(bx, 50, bw, 30);
     if (av.pftT < 30) txt(c, 'PFT', bx + bw / 2, 66, 20, C.white, 'center');
+    else if (s.ap.engaged) { txt(c, 'AP', bx + 26, 66, 20, C.green, 'center'); txt(c, 'ROL', bx + 86, 66, 18, C.green, 'center'); txt(c, 'PIT', bx + 140, 66, 18, C.green, 'center'); }
+    else if (s.ap.discFlash > 0 && (now % 0.6) < 0.35) { c.fillStyle = C.amber; c.fillRect(bx + 6, 54, 40, 22); txt(c, 'AP', bx + 26, 66, 20, '#000', 'center'); }
   }
   // Top bar: COM, transponder, data fields
   c.fillStyle = '#05080b'; c.fillRect(px, 0, W - px, 48); c.strokeStyle = C.line; c.lineWidth = 2; c.beginPath(); c.moveTo(px, 48); c.lineTo(W, 48); c.stroke();
@@ -176,7 +184,7 @@ function g3xMain(c, s, B, now) {
   txt(c, 'N100PT', px + 294, 14, 12, C.grey, 'center');
   txt(c, xp ? s.xpdr.code : '----', px + 266, 32, 20, xp ? C.white : C.grey, 'center'); txt(c, xp ? 'GND' : '', px + 324, 32, 16, C.green, 'center');
   button(c, B, px + 356, 6, 64, 36, 'IDENT', null, { size: 14 });
-  if (!split) [['GS', '0KT'], ['DTK', '___°'], ['TRK', '___°'], ['ETE', '__:__']].forEach(([l, v], i) => { const fx = px + 440 + i * 86; txt(c, l, fx, 14, 12, C.grey); txt(c, v, fx, 34, 18, C.mag); });
+  if (!split) [['GS', Math.round(s.fl.gs) + 'KT'], ['DTK', s.fl.onGround && s.fl.phase === 'parked' ? '___°' : (s.fl.hdg > 180 ? '270°' : '090°')], ['TRK', String(Math.round(s.fl.hdg) % 360 || 360).padStart(3, '0') + '°'], ['ETE', '__:__']].forEach(([l, v], i) => { const fx = px + 440 + i * 86; txt(c, l, fx, 14, 12, C.grey); txt(c, v, fx, 34, 18, C.mag); });
   button(c, B, W - 70, 6, 62, 36, split ? 'Full' : 'Split', () => { av.mfd = split ? 'none' : (av.lastMfd || 'eng'); }, { size: 15 });
   // CAS window (touch to acknowledge)
   const cas = casMessages();
@@ -207,9 +215,10 @@ function engPage(c, s, B, x, y, w, h, ok) {
   ['Main', 'Fuel Calc'].forEach((l, i) => button(c, B, x + 10 + i * 140, y + 8, 132, 34, l, () => (av.engTab = i ? 'fuel' : 'main'), { on: (av.engTab === 'fuel') === !!i, size: 16 }));
   const yy = y + 56;
   if (av.engTab !== 'fuel') {
-    const e = s.engine;
+    const e = s.engine, D = engineDerived();
+    txt(c, `EGT ${Math.round(D.egt)} °F   FF ${D.ff.toFixed(1)} GPH`, x + w / 2, yy + 180, 15, C.cyan, 'center', 600);
     dial(c, x + w / 2, yy + 92, 74, e.rpm, 0, 3000, [[500, 2700, G], [2700, 2800, R]], 'RPM', String(Math.round(e.rpm / 10) * 10), ok);
-    let by = yy + 190;
+    let by = yy + 196;
     by = hbar(c, x + 18, by, w - 36, 'OIL PRES PSI', e.oilPress, 0, 115, String(Math.round(e.oilPress)), [[0, 25, R], [25, 55, Y], [55, 95, G], [95, 115, R]], ok);
     by = hbar(c, x + 18, by, w - 36, 'OIL TEMP °F', e.oilTemp * 9 / 5 + 32, 40, 260, String(Math.round(e.oilTemp * 9 / 5 + 32)), [[40, 100, Y], [100, 245, G], [245, 260, R]], ok);
     txt(c, 'FUEL USED', x + 18, by + 14, 15, C.grey); txt(c, av.fuelUsed.toFixed(1) + ' GAL', x + w - 18, by + 14, 17, C.white, 'right');
@@ -276,10 +285,10 @@ function g5(c, s) {
   const W = 400, H = 400, av = s.avionics;
   if (av.g5Boot < 3) { c.fillStyle = '#000'; c.fillRect(0, 0, W, H); txt(c, 'Self test', W / 2, H / 2, 26, C.white, 'center'); c.fillStyle = C.cyan; c.fillRect(100, 230, 200 * Math.min(1, av.g5Boot / 3), 6); return; }
   if (av.g5Boot < 9) { c.fillStyle = '#0b0f14'; c.fillRect(0, 0, W, H); txt(c, 'ALIGNING', W / 2, 150, 26, C.amber, 'center'); }
-  else attitude(c, 0, 0, W, H, 2.5, 0);
-  tape(c, 4, 80, 74, 220, 0, 10, '', v => String(v), 'L');
-  tape(c, W - 84, 80, 80, 220, s.fieldElev, 100, '', v => String(v), 'R');
-  c.fillStyle = '#000'; c.fillRect(0, H - 50, W, 50); txt(c, '360°', W / 2, H - 25, 24, C.white, 'center');
+  else attitude(c, 0, 0, W, H, s.fl.pitch, s.fl.roll * Math.PI / 180);
+  tape(c, 4, 80, 74, 220, iasOf(s), 10, '', v => String(v), 'L');
+  tape(c, W - 84, 80, 80, 220, indAlt(s), 100, '', v => String(v), 'R');
+  c.fillStyle = '#000'; c.fillRect(0, H - 50, W, 50); txt(c, String(Math.round(s.fl.hdg) % 360 || 360).padStart(3, '0') + '°', W / 2, H - 25, 24, C.white, 'center');
   txt(c, s.baro.toFixed(2), W - 50, H - 25, 18, C.cyan, 'center');
   if (!busPowered()) { c.fillStyle = C.amber; c.fillRect(100, 300, 200, 36); txt(c, 'ON BATTERY', W / 2, 318, 20, '#000', 'center', 800); }
 }

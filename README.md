@@ -27,6 +27,21 @@ Redrawn from the descriptions and layouts in the G3X Touch, GNX 375 and radio pi
 - **GNX 375:** start-up databases, Instrument Test, then the map with the transponder bar (ALT only, as the POH notes).
 - **G5** standby with self test and alignment, and the **GNC 255A** frequency display.
 
+## Stage 3: start, taxi, fly and park
+
+Open **Checklists → Start, taxi, fly and park** (POH 4.5c–4.5q). It picks up where the walk-around leaves the airplane and runs:
+
+Before starting engine → Engine start (cold) → Before taxiing → Taxiing → Ground check (run-up) → Before takeoff → Takeoff → Climb → Cruise → Descent → Approach and landing → (Go-around) → After landing → Stopping engine → Mooring.
+
+- **The engine behaves like the real one.** It needs a prime and starts on it. Advance the mixture within a few seconds or it dies. Oil pressure comes up, and the alternator charges once the ALTR switch is on and the RPM is up.
+  - Mag check: about 90–110 RPM drop on each mag at 2,000 RPM.
+  - ALT AIR open: about 55 RPM drop.
+  - Leaning: watch EGT peak and the RPM rise.
+- **You drive the airplane.** Release the brake and add power to taxi. It follows taxiway A, stops on the run-up pad, at the hold-short line and lined up on runway 27. Full power and a pull on the wheel at 60 KIAS gets you airborne.
+- **The flight follows a set route.** The route is fixed: climb out on 27, level at 2,500 ft, turn back when you're ready, then a straight-in to runway 9 on a 3° path. You manage power, mixture, flaps, fuel pump, lights and brakes. Speed, climb and descent come from a power model matched to the POH: about 950 ft ground roll, Vy 76 KIAS at about 650 fpm, about 111 KIAS at 2,400 RPM, and 66 KIAS on final with flaps 40. Speed ×4 shortens the en-route parts.
+- **Avionics react:** the G3X and G5 show real attitude, speed, altitude (with your altimeter setting), vertical speed and heading. The autopilot engages from the GMC 507 and disconnects with A/P DISC.
+- **The airport:** runway 9/27 (3,600 × 75 ft) with markings, taxiways and hold-short markings, ramp, hangars and windsock, in farmland that runs to the horizon.
+
 ## Using it
 
 - **Outside:** drag to walk around the airplane, pinch to zoom, tap a part to see what it is and what it's set to.

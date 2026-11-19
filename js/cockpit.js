@@ -10,7 +10,7 @@ import { powered, busPowered } from './state.js';
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 export const PZ = 1.62; // panel face station
 export const PB = 0.97; // panel bottom height
-export const EYE = V(-0.27, 1.43, 2.42); // pilot's eye
+export const EYE = V(-0.27, 1.65, 2.40); // pilot's eye, seated
 
 // figure pixel → world point on (or in front of) the panel face
 const P = (u, v, dz = 0) => V((u - 872) * K, PB + (FIG.v1 - v) * K, PZ + dz);
@@ -71,7 +71,7 @@ export function buildCockpit(renderer) {
       top.push([(u - 872) * K, PB + (FIG.v1 - v) * K]);
     }
     const P3 = [], I = [];
-    top.forEach(([x, y]) => { P3.push(x, y - 0.018, PZ + 0.035, x, y + 0.012, PZ + 0.02, x * 1.03, y + 0.075 + 0.03 * (1 - Math.abs(x) / 0.56), PZ - 0.2); });
+    top.forEach(([x, y]) => { P3.push(x, y - 0.018, PZ + 0.035, x, y + 0.012, PZ + 0.02, x * 1.03, y + 0.06 + 0.01 * (1 - Math.abs(x) / 0.56), PZ - 0.2); });
     for (let i = 0; i < N; i++) { const a = i * 3; for (let k = 0; k < 2; k++) I.push(a + k, a + 3 + k, a + k + 1, a + 3 + k, a + 4 + k, a + k + 1); }
     const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.Float32BufferAttribute(P3, 3)); gg.setIndex(I); gg.computeVertexNormals();
     const gm = new THREE.Mesh(gg, mat.glare); gm.material.side = THREE.DoubleSide; gm.castShadow = true; g.add(gm);
@@ -272,9 +272,9 @@ export function buildCockpit(renderer) {
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.019, 14, 10), mat.grip); cap.position.set(sx * 0.181, 0.168, 0); yk.add(cap);
     });
     // push-to-talk and trim switch on the left grip
-    const ptt = new THREE.Mesh(new THREE.SphereGeometry(0.006, 10, 8), mat.red); ptt.position.set(-0.168, 0.15, 0.016); yk.add(ptt);
-    const ap = new THREE.Mesh(new THREE.SphereGeometry(0.005, 10, 8), mat.red); ap.position.set(0.168, 0.15, 0.016); yk.add(ap);
-    hot(yk, 'yoke'); hot(shaft, 'yoke');
+    const disc = new THREE.Mesh(new THREE.SphereGeometry(0.0065, 10, 8), mat.red); disc.position.set(-0.168, 0.15, 0.016); yk.add(disc);
+    const ptt = new THREE.Mesh(new THREE.SphereGeometry(0.005, 10, 8), mat.black); ptt.position.set(0.168, 0.15, 0.016); yk.add(ptt);
+    hot(yk, 'yoke'); hot(shaft, 'yoke'); if (u < 872) disc.userData.hot = 'apDisc';
     parts.yokes.push({ g: yk, base: yk.position.clone() });
     if (u < 872) { // control wheel restraint: the pilot's seat belt wrapped around the wheel
       const lock = new THREE.Group(); yk.add(lock);

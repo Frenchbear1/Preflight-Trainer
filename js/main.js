@@ -7,11 +7,13 @@ import { buildCockpit, updateCockpit, EYE } from './cockpit.js';
 import { state, tick, simulate, lightsOn, stallWarning, onChange, resetState } from './state.js';
 import { ACTIONS, partList, setDisplays } from './actions.js';
 import { INFO } from './data.js';
-import { tone, chime } from './audio.js';
+import { tone, chime, engineSound } from './audio.js';
 import { CHECKLISTS, flatSteps } from './checklists.js';
+import { buildAirport } from './airport.js';
+import { stepFlight, worldMatrix, flightInfo, goAround, turnBack, resetFlight } from './flight.js';
 
 const canvas = document.getElementById('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -29,12 +31,12 @@ scene.fog = new THREE.Fog(0xc9d8e6, 60, 420);
 {
   const geo = new THREE.SphereGeometry(500, 32, 16);
   const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
     uniforms: { top: { value: new THREE.Color(0x3d7fc7) }, mid: { value: new THREE.Color(0x9cc4e8) }, bot: { value: new THREE.Color(0xdfe9f1) } },
     vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: 'uniform vec3 top; uniform vec3 mid; uniform vec3 bot; varying vec3 vP; void main(){ float h = vP.y; vec3 c = h > 0.0 ? mix(mid, top, pow(clamp(h,0.0,1.0), 0.6)) : bot; c = mix(bot, c, smoothstep(-0.02, 0.08, h)); gl_FragColor = vec4(c,1.0); }',
   });
-  scene.add(new THREE.Mesh(geo, mat));
+  const sky = new THREE.Mesh(geo, mat); sky.renderOrder = -1000; sky.frustumCulled = false; scene.add(sky); // always behind everything
 }
 
 // Light
@@ -46,26 +48,10 @@ Object.assign(sun.shadow.camera, { left: -7.5, right: 7.5, top: 7.5, bottom: -7.
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
-// Ramp: concrete with expansion joints and a painted tie-down spot
-function rampTexture() {
-  const c = document.createElement('canvas'); c.width = c.height = 1024; const x = c.getContext('2d');
-  x.fillStyle = '#9d9d97'; x.fillRect(0, 0, 1024, 1024);
-  const img = x.getImageData(0, 0, 1024, 1024); const d = img.data;
-  for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 22; d[i] += n; d[i + 1] += n; d[i + 2] += n * 0.9; }
-  x.putImageData(img, 0, 0);
-  for (let i = 0; i < 60; i++) { x.fillStyle = `rgba(60,58,52,${Math.random() * 0.06})`; x.beginPath(); x.arc(Math.random() * 1024, Math.random() * 1024, 20 + Math.random() * 80, 0, 7); x.fill(); }
-  x.strokeStyle = 'rgba(45,45,42,0.55)'; x.lineWidth = 3; x.strokeRect(0, 0, 1024, 1024);
-  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(60, 60); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
-  return t;
-}
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ map: rampTexture(), roughness: 0.92 }));
-ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; ground.position.set(0, 0, 3); scene.add(ground);
-{ // yellow parking T
-  const m = new THREE.MeshStandardMaterial({ color: 0xe8b923, roughness: 0.8 });
-  const a = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 9), m); a.rotation.x = -Math.PI / 2; a.position.set(0, 0.003, 2.2); a.receiveShadow = true;
-  const b = new THREE.Mesh(new THREE.PlaneGeometry(9, 0.15), m); b.rotation.x = -Math.PI / 2; b.position.set(0, 0.003, 2.9); b.receiveShadow = true;
-  scene.add(a, b);
-}
+// Airport and countryside. The airplane stays at the origin; this world group moves around it.
+const world = new THREE.Group(); world.matrixAutoUpdate = false; scene.add(world);
+const airport = buildAirport(); world.add(airport.group);
+const worldM = new THREE.Matrix4();
 
 // Airplane
 const plane = new THREE.Group(); scene.add(plane);
@@ -74,7 +60,7 @@ const cpt = buildCockpit(renderer); plane.add(cpt.group);
 setDisplays(cpt.parts.displays);
 
 // ---------------- Cameras ----------------
-const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 1200);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 30000);
 const orbit = new OrbitControls(camera, canvas);
 orbit.enableDamping = true; orbit.dampingFactor = 0.08;
 orbit.minDistance = 0.4; orbit.maxDistance = 18; orbit.maxPolarAngle = Math.PI * 0.495;
@@ -82,7 +68,7 @@ orbit.target.set(0, 1.0, 3.3); camera.position.set(-7.8, 3.4, -4.2);
 orbit.zoomToCursor = true;
 
 let mode = 'outside';
-const look = { yaw: 0, pitch: -0.12, fov: 62 };
+const look = { yaw: 0, pitch: -0.3, fov: 62 };
 const camAnim = { t: 1, from: null, to: null };
 
 function setView(v, animate = true) {
@@ -93,7 +79,7 @@ function setView(v, animate = true) {
     flyTo({ pos: new THREE.Vector3(-7.8, 3.4, -4.2), target: new THREE.Vector3(0, 1.0, 3.3), fov: 42 }, animate);
   } else {
     orbit.enabled = false;
-    look.yaw = 0; look.pitch = -0.16; look.fov = 62;
+    look.yaw = 0; look.pitch = -0.3; look.fov = 62;
     flyTo({ pos: EYE.clone(), target: lookTarget(EYE, look.yaw, look.pitch), fov: look.fov }, animate);
   }
 }
@@ -290,25 +276,28 @@ function renderMenu() {
   const list = document.getElementById('menuList'); list.innerHTML = '';
   CHECKLISTS.forEach(cl => {
     const n = flatSteps(cl).length, sv = saved(cl.id), doneN = sv ? Object.keys(sv.done).length : 0;
-    const b = document.createElement('button'); b.innerHTML = `<b>${cl.title} walk-around</b><span>${cl.ref} · ${n} items · cockpit, right wing, nose, left wing, tail</span>`;
+    const b = document.createElement('button'); b.innerHTML = `<b>${cl.title}</b><span>${cl.ref} · ${n} items · ${cl.desc}</span>`;
     b.onclick = () => startList(cl, null); list.append(b);
     if (sv && doneN && doneN < n) { const r = document.createElement('div'); r.className = 'row'; const c = document.createElement('button'); c.innerHTML = `<b>Resume</b><span>${doneN} of ${n} done</span>`; c.onclick = () => startList(cl, sv); r.append(c); list.append(r); }
   });
-  [['Before start through shutdown', 'POH 4.5b–4.5p · coming next'], ['Emergency procedures', 'POH Section 3 · coming next']].forEach(([t, d]) => { const b = document.createElement('button'); b.disabled = true; b.innerHTML = `<b>${t}</b><span>${d}</span>`; list.append(b); });
+  [['Emergency procedures', 'POH Section 3 · coming next']].forEach(([t, d]) => { const b = document.createElement('button'); b.disabled = true; b.innerHTML = `<b>${t}</b><span>${d}</span>`; list.append(b); });
 }
 document.getElementById('btnLists').onclick = () => { menuEl.hidden = !menuEl.hidden; if (!menuEl.hidden) renderMenu(); };
 document.getElementById('menuClose').onclick = () => (menuEl.hidden = true);
 document.getElementById('clClose').onclick = () => stopList();
 function startList(cl, resume) {
   menuEl.hidden = true; partsEl.hidden = true; hideCard();
-  if (!resume) resetState();
+  if (!resume) { resetState(); resetFlight(); cl.start?.(); }
   run.list = cl; run.steps = flatSteps(cl); run.done = resume?.done || {}; run.idx = 0;
   clEl.hidden = false; document.body.classList.add('cl-open'); resize();
   document.getElementById('clTitle').textContent = cl.title; document.getElementById('clRef').textContent = cl.ref;
   goStep(resume ? nextOpen(resume.idx) : 0);
 }
 function stopList() { run.list = null; clEl.hidden = true; document.body.classList.remove('cl-open'); resize(); pip.active = false; ring.visible = false; document.getElementById('pip').hidden = true; }
-function nextOpen(from) { for (let i = from; i < run.steps.length; i++) if (!run.done[run.steps[i].key]) return i; for (let i = 0; i < from; i++) if (!run.done[run.steps[i].key]) return i; return run.steps.length; }
+const active = st => !st.optional || st.optional();
+function nextOpen(from) { for (let i = from; i < run.steps.length; i++) if (!run.done[run.steps[i].key] && active(run.steps[i])) return i; for (let i = 0; i < from; i++) if (!run.done[run.steps[i].key] && active(run.steps[i])) return i; return run.steps.length; }
+// A go-around jumps to its checklist
+onChange(w => { if (w === 'event:goaround' && run.list) { const i = run.steps.findIndex(x => x.sec === 'Go-around'); if (i >= 0) goStep(i); } });
 function goStep(i) {
   run.idx = i; run.arrived = performance.now();
   const st = run.steps[i];
@@ -324,12 +313,12 @@ function completeStep(i) {
   clearTimeout(run.t); run.t = setTimeout(() => { if (run.idx === i) goStep(nextOpen(i + 1)); }, 700);
 }
 function renderCL() {
-  const n = run.steps.length, d = Object.keys(run.done).length, st = run.steps[run.idx];
+  const n = run.steps.filter(active).length, d = Object.keys(run.done).length, st = run.steps[run.idx];
   document.getElementById('clBar').style.width = (100 * d / n) + '%';
   const now = document.getElementById('clNow');
   if (!st) {
     now.className = 'done-all';
-    now.innerHTML = `<div class="sec">${run.list.title}</div><div class="item">Walk-around complete</div><div class="tip">${d} of ${n} items checked. The airplane is ready for the Before Starting Engine checklist.</div><div class="btns"><button class="primary" id="clAgain">Start over</button></div>`;
+    now.innerHTML = `<div class="sec">${run.list.title}</div><div class="item">Checklist complete</div><div class="tip">${d} of ${n} items checked.${run.list.id === 'preflight' ? ' Next: Checklists → Start, taxi, fly and park.' : ' The airplane is parked and secured.'}</div><div class="btns"><button class="primary" id="clAgain">Start over</button></div>`;
     document.getElementById('clAgain').onclick = () => startList(run.list, null);
   } else {
     now.className = '';
@@ -346,6 +335,7 @@ function renderCL() {
   }
   const list = document.getElementById('clList'); list.innerHTML = '';
   run.list.sections.forEach((sec, si) => {
+    if (sec.optional && !sec.optional()) return;
     const h = document.createElement('h3'); h.textContent = sec.title; list.append(h);
     sec.steps.forEach((x, i) => {
       const k = `${si}.${i}`, idx = run.steps.findIndex(y => y.key === k);
@@ -364,7 +354,7 @@ function checkRun() {
 }
 
 // Close-up inset for small parts, and a pulsing ring on the current part
-const pipCam = new THREE.PerspectiveCamera(30, 1.4, 0.01, 200);
+const pipCam = new THREE.PerspectiveCamera(30, 1.4, 0.01, 30000);
 const pip = { active: false, id: null, dir: null };
 function setupPip(st) {
   const el0 = document.getElementById('pip');
@@ -420,7 +410,33 @@ function renderPip() {
 }
 
 document.querySelectorAll('#viewSeg button').forEach(b => (b.onclick = () => setView(b.dataset.view)));
-document.getElementById('btnReset').onclick = () => { resetState(); hideCard(); if (run.list) { run.done = {}; goStep(0); } };
+document.getElementById('btnReset').onclick = () => { resetState(); resetFlight(); hideCard(); if (run.list) { run.list.start?.(); run.done = {}; goStep(0); } };
+
+// ---------------- Flight panel (shown while moving) ----------------
+const hud = document.getElementById('flight');
+function updateFlightHud() {
+  const fi = flightInfo(), f = state.fl;
+  const show = f.phase !== 'parked' || f.gs > 0.5 || (run.list?.id === 'normal' && state.engine.running);
+  hud.hidden = !show; if (!show) return;
+  hud.querySelector('.ph').textContent = fi.label;
+  hud.querySelector('.ias').textContent = Math.round(fi.ias);
+  hud.querySelector('.alt').textContent = Math.round(fi.altMSL / 10) * 10;
+  hud.querySelector('.vs').textContent = (fi.vs > 0 ? '+' : '') + Math.round(fi.vs / 10) * 10;
+  hud.querySelector('.rpm').textContent = Math.round(state.engine.rpm / 10) * 10;
+  hud.querySelector('.msg').textContent = fi.msg || (state.engine.running && state.fl.phase === 'parked' && ['chockL', 'chockR', 'chockN', 'tiedownL', 'tiedownR', 'tiedownT'].some(k => state.ext[k]) ? 'Chocks or tie-downs still attached' : '');
+  const air = !f.onGround;
+  hud.querySelector('#btnTime').hidden = !(air && ['climb', 'cruise', 'return', 'descent', 'approach', 'goaround', 'goaround-level'].includes(f.phase));
+  hud.querySelector('#btnTime').textContent = f.timeScale > 1 ? 'Speed ×4 ✓' : 'Speed ×4';
+  hud.querySelector('#btnTurn').hidden = f.phase !== 'cruise';
+  hud.querySelector('#btnGA').hidden = !['approach', 'final'].includes(f.phase);
+  brakeBtn.hidden = !f.onGround; brakeBtn.textContent = state.toeBrake ? 'Brakes held — release' : 'Hold brakes';
+  brakeBtn.classList.toggle('on', state.toeBrake);
+}
+const brakeBtn = document.getElementById('btnBrake');
+brakeBtn.onclick = () => { state.toeBrake = !state.toeBrake; if (state.toeBrake) state.events.brakesPressed = true; };
+document.getElementById('btnTime').onclick = () => (state.fl.timeScale = state.fl.timeScale > 1 ? 1 : 4);
+document.getElementById('btnTurn').onclick = () => turnBack();
+document.getElementById('btnGA').onclick = () => goAround();
 
 // ---------------- Loop ----------------
 function resize() {
@@ -436,6 +452,15 @@ let t0 = performance.now();
 let stallTone = null;
 function frame(now) {
   const dt = tick(now);
+  stepFlight(dt);
+  worldMatrix(THREE, worldM); world.matrix.copy(worldM); world.matrixWorldNeedsUpdate = true;
+  // keep the farmland centred under the airplane and scroll its texture
+  const f = state.fl;
+  airport.ground.position.set(f.x, -0.02, f.z);
+  airport.fieldTex.offset.set(f.x / airport.TILE, -f.z / airport.TILE);
+  scene.fog.near = 300 + f.alt * 12; scene.fog.far = 2500 + f.alt * 60; // about 10 miles visibility once airborne
+  engineSound(state.engine.rpm, state.startPressed);
+  updateFlightHud();
   const t = (now - t0) / 1000;
   const lights = lightsOn();
   updateExterior(ext.parts, state, lights, t, dt);
@@ -456,4 +481,4 @@ setTimeout(() => { const h = document.getElementById('hint'); if (h) h.style.opa
 requestAnimationFrame(frame);
 
 // For automated checks
-window.__pt = { run, startList, CHECKLISTS, goStep, completeStep, camAnim, simulate, THREE, scene, camera, state, setView, focusPart, ext, cpt, renderer, look, pick, ACTIONS, showCard, mode: () => mode };
+window.__pt = { advance: sec => { for (let t = 0; t < sec; t += 0.05) { simulate(0.05); stepFlight(0.05); } }, flightInfo, turnBack, goAround, world, airport, run, startList, CHECKLISTS, goStep, completeStep, camAnim, simulate, THREE, scene, camera, state, setView, focusPart, ext, cpt, renderer, look, pick, ACTIONS, showCard, mode: () => mode };
