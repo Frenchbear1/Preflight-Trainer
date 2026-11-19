@@ -23,6 +23,7 @@
     <button data-view="cockpit">Cockpit</button>
   </nav>
   <div class="tools">
+    <button id="btnLists" title="Checklists">Checklists</button>
     <button id="btnParts" title="Find a part">Parts</button>
     <button id="btnReset" title="Put everything back to parked">Reset</button>
   </div>
@@ -40,6 +41,21 @@
   <input id="partsSearch" placeholder="Search parts" autocomplete="off">
   <div id="partsList"></div>
 </aside>
+
+<aside id="menu" hidden>
+  <div class="card-head"><h2>Checklists</h2><button id="menuClose" aria-label="Close">✕</button></div>
+  <div id="menuList"></div>
+  <p class="muted">Outside a checklist, everything stays free to touch.</p>
+</aside>
+
+<aside id="cl" hidden>
+  <div class="card-head"><div><h2 id="clTitle"></h2><div id="clRef"></div></div><button id="clClose" aria-label="Close checklist">✕</button></div>
+  <div class="cl-prog"><div id="clBar"></div></div>
+  <div id="clNow"></div>
+  <div id="clList"></div>
+</aside>
+
+<div id="pip" hidden><span>Close-up</span></div>
 
 <div id="hint">Drag to look around · pinch to zoom · tap any part</div>
 <div id="loading">Building the airplane…</div>

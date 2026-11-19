@@ -42,3 +42,13 @@ export function engineSound(rpm, cranking) {
   eng.f.frequency.setTargetAtTime(250 + rpm * 0.35, c.currentTime, 0.2);
   eng.g.gain.setTargetAtTime(rpm > 30 ? Math.min(0.16, 0.03 + rpm / 16000) : 0, c.currentTime, 0.15);
 }
+
+// Soft two-note chime when a checklist item is complete
+export function chime() {
+  const c = ac(); if (!c) return;
+  [880, 1320].forEach((f, i) => {
+    const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.value = f;
+    const t = c.currentTime + i * 0.09; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.12, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.4);
+  });
+}

@@ -86,7 +86,7 @@ export function buildCockpit(renderer) {
     const tex = canvasTex(cv); tex.anisotropy = 4;
     const w = (u1 - u0) * K, h = (v1 - v0) * K;
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
-    m.position.copy(P((u0 + u1) / 2, (v0 + v1) / 2, dz)); hot(m, id); g.add(m); return tex;
+    m.position.copy(P((u0 + u1) / 2, (v0 + v1) / 2, dz)); hot(m, id); m.userData.screen = id; g.add(m); return tex;
   };
   const bezel = (u0, v0, u1, v1, depth, id) => {
     const w = (u1 - u0) * K, h = (v1 - v0) * K;
@@ -276,6 +276,13 @@ export function buildCockpit(renderer) {
     const ap = new THREE.Mesh(new THREE.SphereGeometry(0.005, 10, 8), mat.red); ap.position.set(0.168, 0.15, 0.016); yk.add(ap);
     hot(yk, 'yoke'); hot(shaft, 'yoke');
     parts.yokes.push({ g: yk, base: yk.position.clone() });
+    if (u < 872) { // control wheel restraint: the pilot's seat belt wrapped around the wheel
+      const lock = new THREE.Group(); yk.add(lock);
+      const strap = new THREE.Mesh(tube([V(-0.2, 0.09, -0.01), V(-0.15, 0.13, 0.06), V(-0.13, 0.08, 0.16), V(-0.16, -0.02, 0.24)], 0.012, 30, 6), new THREE.MeshStandardMaterial({ color: 0x2a2f45, roughness: 0.8 }));
+      strap.scale.z = 1; lock.add(strap);
+      const buckle = new THREE.Mesh(rbox(0.05, 0.03, 0.012, 0.004), mat.chrome); buckle.position.set(-0.13, 0.1, 0.14); lock.add(buckle);
+      hot(lock, 'controlLock'); parts.controlLock = lock;
+    }
   });
 
   // ---------- Fuel selector (left kick panel, Figure 7-11) ----------
@@ -331,6 +338,16 @@ export function buildCockpit(renderer) {
     return s;
   };
   seat(-0.28, 2.50); seat(0.28, 2.50); seat(0, 3.32, 0.56);
+  // Document pocket on the right sidewall (POH, certificates) and the tow bar stowed aft
+  { const pk = new THREE.Group(); pk.position.set(0.545, 0.86, 1.98); g.add(pk);
+    const pouch = new THREE.Mesh(rbox(0.03, 0.2, 0.3, 0.01), new THREE.MeshStandardMaterial({ color: 0x5d564b, roughness: 0.9 })); pk.add(pouch);
+    const book = new THREE.Mesh(rbox(0.025, 0.24, 0.17, 0.004), new THREE.MeshStandardMaterial({ color: 0x1b2f66, roughness: 0.7 })); book.position.set(-0.012, 0.07, -0.04); book.rotation.x = 0.08; pk.add(book);
+    hot(pk, 'docs'); }
+  { const tb = new THREE.Group(); tb.position.set(0, 0.93, 3.85); g.add(tb);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.9, 10), mat.alu); bar.rotation.z = Math.PI / 2; tb.add(bar);
+    const hd = new THREE.Mesh(rbox(0.05, 0.05, 0.08, 0.01), mat.red); hd.position.x = 0.46; tb.add(hd);
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.012), new THREE.MeshStandardMaterial({ color: 0x2a2f45 })); strap.position.set(-0.2, 0.0, 0); tb.add(strap);
+    hot(tb, 'towbar'); }
   // Armrests on the sidewalls
   [-1, 1].forEach(sx => { const a = new THREE.Mesh(rbox(0.07, 0.05, 0.5, 0.02), mat.trim); a.position.set(sx * 0.56, 1.02, 2.45); g.add(a); });
   // Wet compass on the windshield bow
@@ -380,6 +397,7 @@ export function updateCockpit(cpt, s, t, dt) {
   p.pitchTrim.rotation.x = -s.pitchTrim * 6;
   p.trimInd.position.z = 2.12 - s.pitchTrim * 0.03;
   // Yokes: pull aft for nose up, turn for roll
+  if (p.controlLock) p.controlLock.visible = s.controlLock;
   p.yokes.forEach(y => { y.g.position.z = y.base.z + s.yokePitch * 0.075 - (s.controlLock ? 0.04 : 0); y.g.rotation.z = -s.yokeRoll * 0.75; });
   p.pedals.forEach(pd => (pd.piv.rotation.x = (pd.right ? -s.rudder : s.rudder) * 0.22 + (pd.right ? -1 : 1) * s.rudderTrim * 0.02));
   // Lighting
@@ -390,7 +408,7 @@ export function updateCockpit(cpt, s, t, dt) {
   p.eltLed.emissiveIntensity = s.elt === 'ON' || (s.elt === 'TEST' && (t % 1) < 0.5) ? 3 : 0;
   // Screens at ~12 frames per second
   if (t - cpt.lastDraw > 0.08) {
-    cpt.lastDraw = t; p.displays.draw(s);
+    cpt.lastDraw = t; p.displays.draw(s, t);
     p.pfdTex.needsUpdate = p.g5Tex.needsUpdate = p.gnxTex.needsUpdate = p.gncTex.needsUpdate = true;
   }
 }

@@ -132,7 +132,10 @@ function fuselageMaterial(glass) {
 
 function buildFuselage(g) {
   const geo = loft({ s0: 0.255, s1: 7.2, nS: 220, nA: 120, section: fuseSection });
-  const fus = new THREE.Mesh(geo, M.paint); fus.castShadow = true; fus.receiveShadow = true; fus.name = 'fuselage'; fus.userData.windowed = 'body';
+  const fus = new THREE.Mesh(geo, M.paint); fus.castShadow = true; fus.receiveShadow = true; fus.name = 'fuselage'; fus.userData.windowed = 'body'; fus.userData.hot = 'fuselage';
+  // invisible markers so the camera can frame whole regions
+  const mark = (id, w, h, d, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial()); m.position.set(x, y, z); m.visible = false; m.userData.hot = id; g.add(m); };
+  mark('cowl', 1.0, 0.75, 1.1, 0, 1.12, 0.8); mark('empennage', 3.9, 1.1, 1.6, 0, 1.55, 6.6);
   // the shadow pass must also see the window holes
   const dm = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
   dm.onBeforeCompile = sh => {
@@ -183,7 +186,7 @@ function wingPiece(x0, x1, n, opt) {
 function buildWing(g, sign, parts) {
   const S = sign; // +1 right, -1 left
   const piece = (a, b, n, opt) => wingPiece(S * a, S * b, n, opt);
-  const add = (geo, mat = M.white) => { const m = new THREE.Mesh(geo, mat); m.castShadow = m.receiveShadow = true; g.add(m); return m; };
+  const add = (geo, mat = M.white) => { const m = new THREE.Mesh(geo, mat); m.castShadow = m.receiveShadow = true; m.userData.hot = S > 0 ? 'wingR' : 'wingL'; g.add(m); return m; };
   const HINGE = 0.76;
   add(piece(0.30, 0.62, 2, { c0: 0, c1: 1 }));
   add(piece(0.62, 2.95, 10, { c0: 0, c1: HINGE }));
@@ -205,7 +208,7 @@ function buildWing(g, sign, parts) {
   // static wicks on the aileron trailing edge
   [4.35, 5.0].forEach(x => {
     const p = wingPt(S * x, 1, 1); const w = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.11, 5), M.black);
-    w.rotation.x = Math.PI / 2; w.position.copy(p).add(V(0, 0, 0.05)).sub(ail.position); w.userData.hot = 'staticWicks'; ail.add(w);
+    w.rotation.x = Math.PI / 2; w.position.copy(p).add(V(0, 0, 0.05)).sub(ail.position); w.userData.hot = S > 0 ? 'wicksR' : 'wicksL'; ail.add(w);
   });
   parts[S > 0 ? 'flapR' : 'flapL'] = flap; parts[S > 0 ? 'aileronR' : 'aileronL'] = ail;
 
@@ -216,7 +219,7 @@ function buildWing(g, sign, parts) {
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.06, 20, 1, true), M.dark); neck.position.y = -0.03; capG.add(neck);
   const capLid = new THREE.Group(); capLid.position.set(0, 0.006, -0.045); capG.add(capLid);
   const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.046, 0.012, 28), M.chrome); lid.position.set(0, 0.004, 0.045); capLid.add(lid);
-  const tab = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.012), M.alu); tab.position.set(0, 0.014, 0.045); capLid.add(tab);
+  const tab = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.007, 0.016), M.alu); tab.position.set(0, 0.012, 0.045); capLid.add(tab);
   [ring, lid, tab].forEach(m => (m.userData.hot = S > 0 ? 'fuelCapR' : 'fuelCapL'));
   // fuel seen through the open neck, with the 17-gallon indicator tab
   const fuelSurf = new THREE.Mesh(new THREE.CircleGeometry(0.036, 20), M.fuel); fuelSurf.rotation.x = -Math.PI / 2; fuelSurf.position.y = -0.05; capG.add(fuelSurf);
@@ -310,7 +313,7 @@ function buildTail(g, parts) {
     const tm = new THREE.Mesh(geo, M.white); tm.userData.hot = 'stabilator'; tg.add(tm); tabs.push(tg);
   });
   parts.tabs = tabs;
-  [-1.9, 1.9].forEach(x => { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 5), M.black); w.rotation.x = Math.PI / 2; w.position.set(x, 0, C * 0.75 + 0.04); stab.add(w); });
+  [-1.9, 1.9].forEach(x => { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 5), M.black); w.rotation.x = Math.PI / 2; w.position.set(x, 0, C * 0.75 + 0.04); w.userData.hot = 'wicksTail'; stab.add(w); });
 
   // Fin and rudder. Root at y 1.27, tip at 2.20; hinge line s 6.95 → 6.985
   const fin = (y, which) => {
@@ -327,7 +330,7 @@ function buildTail(g, parts) {
   const hA = V(0, 1.24, 6.951), hB = V(0, 2.18, 6.985);
   const rud = hingeGroup(hA, hB); g.add(rud); parts.rudder = rud;
   const rm = new THREE.Mesh(intoHinge(airfoilSurface(rudSecs, { n: 22 }), rud), M.white); rm.castShadow = true; rm.userData.hot = 'rudder'; rud.add(rm);
-  const rw = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 5), M.black); rw.rotation.x = Math.PI / 2; rw.position.set(0, 1.85, 7.33).sub(rud.position); rud.add(rw);
+  const rw = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 5), M.black); rw.rotation.x = Math.PI / 2; rw.position.set(0, 1.85, 7.33).sub(rud.position); rw.userData.hot = 'wicksTail'; rud.add(rw);
   // fin stripe (navy band near the top) as a thin overlay on each side
   // Dorsal fillet and ventral fin
   const dors = new THREE.Shape(); dors.moveTo(5.25, 1.36); dors.lineTo(6.05, 1.36); dors.lineTo(6.05, 1.47); dors.quadraticCurveTo(5.7, 1.40, 5.25, 1.36);
@@ -379,10 +382,10 @@ function buildNose(g, parts) {
     const x = sx * 0.235, y = 1.12, s = onFront(x, y);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.012, 10, 32), M.white);
     const inl = new THREE.Mesh(new THREE.CircleGeometry(0.07, 28), M.black);
-    [ring, inl].forEach(m => { m.position.set(x, y, s + 0.004); m.rotation.y = Math.PI - sx * 0.6; m.scale.set(1, 0.9, 1); g.add(m); });
+    [ring, inl].forEach(m => { m.position.set(x, y, s + 0.004); m.rotation.y = Math.PI - sx * 0.6; m.scale.set(1, 0.9, 1); m.userData.hot = 'cowlInlets'; g.add(m); });
   });
   // Landing light lens below the spinner
-  const ll = new THREE.Mesh(new THREE.CircleGeometry(0.045, 24), M.landing); ll.position.set(0, 1.0, onFront(0, 1.0) + 0.003); ll.rotation.y = Math.PI; ll.rotation.x = -0.6; g.add(ll);
+  const ll = new THREE.Mesh(new THREE.CircleGeometry(0.045, 24), M.landing); ll.position.set(0, 1.0, onFront(0, 1.0) + 0.003); ll.rotation.y = Math.PI; ll.rotation.x = -0.6; ll.userData.hot = 'landingLens'; g.add(ll);
   const spot = new THREE.SpotLight(0xfff2d8, 0, 40, 0.35, 0.5, 1.2); spot.position.set(0, 0.99, 0.30); spot.target.position.set(0, 0.2, -14); g.add(spot, spot.target); parts.landingLight = spot;
   parts.landingLens = ll;
   // Oil filler door on the top right of the cowl
@@ -392,7 +395,7 @@ function buildNose(g, parts) {
   const latch = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.006, 0.015), M.chrome); latch.position.set(0, 0.008, 0.2); latch.userData.hot = 'oilDoor'; oilG.add(latch);
   parts.oilDoor = oilG;
   const dip = new THREE.Group(); dip.position.set(ox, fuseY(os, ox, 1) - 0.07, os); g.add(dip); dip.rotation.z = -0.32;
-  const dipCap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 12), M.yellow); dipCap.userData.hot = 'oilDoor'; dip.add(dipCap);
+  const dipCap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 12), M.yellow); dipCap.userData.hot = 'oilDoor'; dipCap.userData.part = 'dipstick'; dip.add(dipCap);
   const dipRod = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.32, 6), M.chrome); dipRod.position.y = -0.17; dip.add(dipRod);
   parts.dipstick = dip;
   // Fuel strainer drain, lower left nose
@@ -487,11 +490,12 @@ function buildGroundItems(g, parts) {
   const chock = (pos, front) => {
     const sh = new THREE.Shape(); sh.moveTo(-0.09, 0); sh.lineTo(0.09, 0); sh.lineTo(0.04, 0.08); sh.lineTo(-0.04, 0.08); sh.closePath();
     const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.22, bevelEnabled: false }); geo.translate(0, 0, -0.11); geo.rotateY(Math.PI / 2);
-    const m = new THREE.Mesh(geo, M.yellow); m.position.set(pos.x, 0, pos.z + (front ? -0.24 : 0.24)); m.castShadow = true; m.userData.hot = 'chocks'; return m;
+    const m = new THREE.Mesh(geo, M.yellow); m.position.set(pos.x, 0, pos.z + (front ? -0.24 : 0.24)); m.castShadow = true; return m;
   };
-  const ch = new THREE.Group(); g.add(ch);
-  ch.add(chock(parts.wheelL, true), chock(parts.wheelL, false), chock(parts.wheelR, true), chock(parts.wheelR, false), chock(parts.wheelN, true));
-  parts.chocks = ch;
+  [['chockL', parts.wheelL], ['chockR', parts.wheelR], ['chockN', parts.wheelN]].forEach(([id, w]) => {
+    const ch = new THREE.Group(); ch.add(chock(w, true)); if (id !== 'chockN') ch.add(chock(w, false));
+    ch.traverse(o => (o.userData.hot = id)); g.add(ch); parts[id] = ch;
+  });
   const rope = (from, hot) => {
     const anchor = V(from.x, 0.005, from.z);
     const r = new THREE.Group();
@@ -542,7 +546,7 @@ export function updateExterior(parts, s, lights, t, dt) {
   // Ground items and doors
   parts.pitotCover.visible = s.ext.pitotCover;
   parts.ribbon.rotation.z = Math.sin(t * 2.1) * 0.12; parts.ribbon.rotation.x = Math.sin(t * 1.3) * 0.15;
-  parts.chocks.visible = s.ext.chocks;
+  parts.chockL.visible = s.ext.chockL; parts.chockR.visible = s.ext.chockR; parts.chockN.visible = s.ext.chockN;
   parts.tiedownL.visible = s.ext.tiedownL; parts.tiedownR.visible = s.ext.tiedownR; parts.tiedownT.visible = s.ext.tiedownT;
   const ease = (o, target) => (o.rotation.x += (target - o.rotation.x) * Math.min(1, dt * 6));
   ease(parts.capL.lid, s.ext.fuelCapL === 'open' ? -1.9 : 0); ease(parts.capR.lid, s.ext.fuelCapR === 'open' ? -1.9 : 0);

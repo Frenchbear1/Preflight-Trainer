@@ -22,24 +22,38 @@ export function freshState() {
     fuelSel: 'L',
     flaps: 0, // degrees: 0, 10, 25, 40
     flapAnim: 0,
-    pitchTrim: 0, rudderTrim: 0, // -1..1
+    pitchTrim: 0.3, rudderTrim: -0.2, // -1..1 (left where the last pilot set them)
     parkBrake: true,
     yokePitch: 0, yokeRoll: 0, rudder: 0, // -1..1
-    controlLock: false,
+    controlLock: true, // control wheel restraint (seat belt around the wheel)
+    baro: 29.92, fieldElev: 380,
+    com: { act: '119.100', stby: '121.900' },
+    xpdr: { code: '1200' },
+    casAck: {},
+    pitotTemp: 15,
+    events: {}, // things the pilot has done (drained a sump, felt the pitot, moved controls to their stops...)
     fuel: { L: 24, R: 24 },
     oilQts: 7,
     ext: {
-      pitotCover: true, chocks: true, tiedownL: true, tiedownR: true, tiedownT: true,
+      pitotCover: true, chockL: true, chockR: true, chockN: true, tiedownL: true, tiedownR: true, tiedownT: true, towbar: false,
       fuelCapL: 'closed', fuelCapR: 'closed', oilDoor: 'closed', dipstick: 'in',
       stallVaneUp: false, door: 'closed',
     },
     engine: { running: false, rpm: 0, oilPress: 0, oilTemp: 15, cranking: 0, startTime: 0 },
     elec: { volts: 0, battAmps: 0, altAmps: 0 },
-    avionics: { pfdBoot: 0, g5Boot: 0, gnxBoot: 0, gncBoot: 0 },
+    avionics: {
+      pfdBoot: 0, g5Boot: 0, gnxBoot: 0, gncBoot: 0, adahrsT: 0, pftT: 0,
+      g3xPage: 'db', dbViewed: false, mfd: 'none', lastMfd: 'eng', engTab: 'main',
+      fuelRem: 48, fuelSet: false, fuelUsed: 0,
+      wb: { pilot: 170, copilot: 0, rear: 0, fuel: 48 }, wbSet: false,
+      gnxPage: 'start',
+    },
   };
 }
 
 export const state = freshState();
+
+export function note(ev, v = true) { state.events[ev] = v; emit('event:' + ev); }
 
 export function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function emit(what) { listeners.forEach(fn => fn(what)); }
@@ -88,6 +102,7 @@ export function casMessages() {
   if (s.startPressed && powered('cb_engstart')) m.push({ t: 'START ENGAGE', c: 'red' });
   if (s.fuel.L < 6 || s.fuel.R < 6) m.push({ t: 'LOW FUEL', c: 'amber' });
   if (!(s.sw.pitotHeat && powered('cb_pitot'))) m.push({ t: 'P HEAT OFF', c: 'amber' });
+  if (s.engine.cranking === 0 && s.startPressed && !powered('cb_engstart')) {}
   if (s.engine.running && (!s.sw.magL || !s.sw.magR)) m.push({ t: s.sw.magL ? 'R MAG OFF' : 'L MAG OFF', c: 'amber' });
   return m;
 }
@@ -140,6 +155,7 @@ export function tick(now) {
       e.oilTemp += (Math.min(185, 80 + e.rpm / 20) - e.oilTemp) * dt * 0.01;
       const burn = (e.rpm / 2400) * 9.5 / 3600 * dt; // gal per second
       if (s.fuelSel !== 'OFF') s.fuel[s.fuelSel] = Math.max(0, s.fuel[s.fuelSel] - burn);
+      s.avionics.fuelUsed += burn; if (s.avionics.fuelSet) s.avionics.fuelRem = Math.max(0, s.avionics.fuelRem - burn);
     }
   }
   if (!e.running && !cranking) {
@@ -159,10 +175,21 @@ export function tick(now) {
   s.elec.battAmps = !bus ? 0 : alt ? 2 : -load;
   // Displays boot once powered
   const av = s.avionics;
-  av.pfdBoot = powered('cb_pfd') ? av.pfdBoot + dt : 0;
+  if (!powered('cb_pfd')) { av.pfdBoot = 0; av.g3xPage = 'db'; av.mfd = 'none'; s.casAck = {}; } else av.pfdBoot += dt;
+  av.adahrsT = powered('cb_adahrs') ? av.adahrsT + dt : 0;
+  av.pftT = powered('cb_autopilot') && av.pfdBoot > 5 ? av.pftT + dt : 0;
+  if (!powered('cb_gpsxpdr')) av.gnxPage = 'start';
   av.g5Boot = powered('cb_stby') || (av.g5Boot > 0 && s.sw.batt) ? av.g5Boot + dt : 0;
   av.gnxBoot = powered('cb_gpsxpdr') ? av.gnxBoot + dt : 0;
   av.gncBoot = powered('cb_com1') ? av.gncBoot + dt : 0;
+  // Heated pitot head warms in about half a minute and cools slowly
+  const heat = s.sw.pitotHeat && powered('cb_pitot');
+  s.pitotTemp += ((heat ? 75 : 15) - s.pitotTemp) * Math.min(1, dt * (heat ? 0.08 : 0.02));
+  if (stallWarning()) note('stallHorn');
+  // Control travel: remember when each stop has been reached
+  if (s.yokePitch > 0.95) s.events.pitchAft = true; if (s.yokePitch < -0.95) s.events.pitchFwd = true;
+  if (s.yokeRoll > 0.95) s.events.rollR = true; if (s.yokeRoll < -0.95) s.events.rollL = true;
+  if (s.rudder > 0.95) s.events.rudR = true; if (s.rudder < -0.95) s.events.rudL = true;
   // Flaps move smoothly toward the handle position
   s.flapAnim += (s.flaps - s.flapAnim) * Math.min(1, dt * 3);
   return dt;

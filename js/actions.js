@@ -1,10 +1,12 @@
 // What each part does when you tap or drag it, and what the info card offers.
-import { state, set, emit, casMessages } from './state.js';
+import { state, set, emit, casMessages, note, powered } from './state.js';
 import { BREAKERS, SWITCHES, INFO } from './data.js';
 import { click } from './audio.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const ACTIONS = {};
+let displays = null;
+export function setDisplays(d) { displays = d; }
 
 const onOff = v => (v ? 'ON' : 'OFF');
 
@@ -109,14 +111,15 @@ ACTIONS.altStatic = {
   tap: () => { set('altStatic', !state.altStatic); click(); },
   options: () => [{ label: 'Off', do: () => set('altStatic', false), selected: () => !state.altStatic }, { label: 'Open', do: () => set('altStatic', true), selected: () => state.altStatic }],
 };
-ACTIONS.pitotDrain = { tap: () => click('knob'), state: () => 'Closed' };
+ACTIONS.pitotDrain = { tap: () => { click('knob'); note('pitotDrain'); }, state: () => (state.events.pitotDrain ? 'Drained, closed' : 'Closed'), options: () => [{ label: 'Open briefly to drain', do: () => { click('knob'); note('pitotDrain'); } }] };
 INFO.pitotDrain = { name: 'Pitot and static drains', ref: 'POH 7.25', text: 'Separate drain valves for the pitot and static lines on the left lower side of the cabin. Open briefly to drain water, then close.' };
 
 ACTIONS.yoke = {
   state: () => `Pitch ${state.yokePitch > 0.05 ? 'aft' : state.yokePitch < -0.05 ? 'forward' : 'neutral'}, roll ${state.yokeRoll > 0.05 ? 'right' : state.yokeRoll < -0.05 ? 'left' : 'level'}`,
-  drag: { start: () => [state.yokePitch, state.yokeRoll], move: (dx, dy, v0) => { state.yokePitch = clamp(v0[0] + dy * 0.006, -1, 1); state.yokeRoll = clamp(v0[1] + dx * 0.006, -1, 1); emit('yoke'); } },
+  drag: { start: () => [state.yokePitch, state.yokeRoll], move: (dx, dy, v0) => { if (state.controlLock) return; state.yokePitch = clamp(v0[0] + dy * 0.006, -1, 1); state.yokeRoll = clamp(v0[1] + dx * 0.006, -1, 1); emit('yoke'); } },
   release: () => {},
   options: () => [
+    ...(state.controlLock ? [{ label: 'Release restraint first', do: () => set('controlLock', false) }] : []),
     { label: 'Full aft', do: () => set('yokePitch', 1) }, { label: 'Full forward', do: () => set('yokePitch', -1) },
     { label: 'Full left', do: () => set('yokeRoll', -1) }, { label: 'Full right', do: () => set('yokeRoll', 1) },
     { label: 'Neutral', do: () => { state.yokePitch = 0; state.yokeRoll = 0; emit('yoke'); } },
@@ -129,8 +132,12 @@ ACTIONS.pedals = {
 };
 
 // Displays
-ACTIONS.pfd = { state: () => (casMessages().length ? 'CAS: ' + casMessages().map(m => m.t).join(', ') : state.avionics.pfdBoot > 0 ? 'ON' : 'OFF') };
-['g5', 'gnx', 'gnc', 'gmc', 'hobbs', 'usb'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
+ACTIONS.pfd = {
+  state: () => (!powered('cb_pfd') ? 'OFF' : state.avionics.pfdBoot < 5 ? 'Starting' : casMessages().length ? 'CAS: ' + casMessages().map(m => m.t).join(', ') : 'ON'),
+  tap: hit => { if (hit?.screen && hit.uv && displays?.touch('pfd', hit.uv)) click('knob'); },
+};
+ACTIONS.gnx = { state: () => (powered('cb_gpsxpdr') ? 'ON' : 'OFF'), tap: hit => { if (hit?.screen && hit.uv && displays?.touch('gnx', hit.uv)) click('knob'); } };
+['g5', 'gnc', 'gmc', 'hobbs', 'usb'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
 
 // ---------------- Exterior ----------------
 const remove = (key, label) => ({
@@ -139,26 +146,44 @@ const remove = (key, label) => ({
   options: () => [{ label: state.ext[key] ? 'Remove' : 'Put back', do: () => { state.ext[key] = !state.ext[key]; emit('ext'); } }],
 });
 ACTIONS.pitotCover = remove('pitotCover');
-ACTIONS.chocks = remove('chocks');
+ACTIONS.chockL = remove('chockL'); ACTIONS.chockR = remove('chockR'); ACTIONS.chockN = remove('chockN');
+['chockL', 'chockR', 'chockN'].forEach((k, i) => (INFO[k] = { name: ['Left main wheel chocks', 'Right main wheel chocks', 'Nose wheel chock'][i], ref: 'POH 4.5a', text: 'Remove before taxi.' }));
+ACTIONS.controlLock = {
+  state: () => (state.controlLock ? 'IN PLACE' : 'RELEASED'),
+  tap: () => { set('controlLock', !state.controlLock); click(); },
+  options: () => [{ label: state.controlLock ? 'Release' : 'Put back', do: () => set('controlLock', !state.controlLock) }],
+};
+INFO.controlLock = { name: 'Control wheel restraint', ref: 'POH 4.5a', text: 'The pilot seat belt wrapped around the wheel to hold the controls while parked. Release it before checking the controls.' };
 ACTIONS.tiedownL = remove('tiedownL'); ACTIONS.tiedownR = remove('tiedownR'); ACTIONS.tiedownT = remove('tiedownT');
 ['L', 'R'].forEach(side => {
   const key = 'fuelCap' + side;
   ACTIONS[key] = {
     state: () => (state.ext[key] === 'open' ? `OPEN · about ${Math.round(state.fuel[side])} gal in the tank` : 'CLOSED & SECURE'),
-    tap: () => { state.ext[key] = state.ext[key] === 'open' ? 'closed' : 'open'; emit('ext'); click('knob'); },
-    options: () => [{ label: state.ext[key] === 'open' ? 'Close and secure' : 'Open cap', do: () => { state.ext[key] = state.ext[key] === 'open' ? 'closed' : 'open'; emit('ext'); } }],
+    tap: () => { state.ext[key] = state.ext[key] === 'open' ? 'closed' : 'open'; if (state.ext[key] === 'open') note('capOpen' + side); emit('ext'); click('knob'); },
+    options: () => [{ label: state.ext[key] === 'open' ? 'Close and secure' : 'Open cap', do: () => { state.ext[key] = state.ext[key] === 'open' ? 'closed' : 'open'; if (state.ext[key] === 'open') note('capOpen' + side); emit('ext'); } }],
   };
-  ACTIONS['sump' + side] = { tap: () => click('knob'), state: () => 'Closed, not leaking', options: () => [{ label: 'Drain a sample', do: () => click('knob') }] };
+  const drain = () => { click('knob'); note('sump' + side); };
+  ACTIONS['sump' + side] = { tap: drain, state: () => (state.events['sump' + side] ? 'Sample: clear blue 100LL, no water or sediment. Closed, not leaking.' : 'Closed'), options: () => [{ label: 'Drain a sample', do: drain }] };
   ACTIONS['vent' + side] = { state: () => 'Clear' };
   ACTIONS['airInlet' + side] = { state: () => 'Clear' };
 });
-ACTIONS.strainer = { tap: () => click('knob'), state: () => 'Closed' };
+ACTIONS.strainer = { tap: () => { click('knob'); note('strainer'); }, state: () => (state.events.strainer ? 'Drained: clear blue, no water. Closed.' : 'Closed'), options: () => [{ label: 'Drain a sample', do: () => { click('knob'); note('strainer'); } }] };
+ACTIONS.pitotTube = {
+  state: () => (state.pitotTemp > 45 ? 'Warm to the touch' : state.pitotTemp > 25 ? 'Slightly warm' : 'Cold') + (state.ext.pitotCover ? ' · cover on' : ' · holes clear'),
+  tap: () => { if (state.pitotTemp > 45) note('pitotWarm'); note('pitotFelt'); },
+  options: () => [{ label: 'Feel the head', do: () => { if (state.pitotTemp > 45) note('pitotWarm'); note('pitotFelt'); } }],
+};
 ACTIONS.oilDoor = {
   state: () => (state.ext.oilDoor === 'open' ? `OPEN · dipstick ${state.ext.dipstick === 'out' ? `out, reads ${state.oilQts} qt` : 'in'}` : 'CLOSED & SECURE'),
-  tap: () => { state.ext.oilDoor = state.ext.oilDoor === 'open' ? 'closed' : 'open'; if (state.ext.oilDoor === 'closed') state.ext.dipstick = 'in'; emit('ext'); },
+  tap: hit => {
+    if (state.ext.oilDoor !== 'open') { state.ext.oilDoor = 'open'; }
+    else if (hit?.part === 'dipstick') { state.ext.dipstick = state.ext.dipstick === 'out' ? 'in' : 'out'; if (state.ext.dipstick === 'out') note('oilChecked'); }
+    else { state.ext.oilDoor = 'closed'; state.ext.dipstick = 'in'; }
+    emit('ext');
+  },
   options: () => [
     { label: state.ext.oilDoor === 'open' ? 'Close door' : 'Open door', do: () => { state.ext.oilDoor = state.ext.oilDoor === 'open' ? 'closed' : 'open'; if (state.ext.oilDoor === 'closed') state.ext.dipstick = 'in'; emit('ext'); } },
-    ...(state.ext.oilDoor === 'open' ? [{ label: state.ext.dipstick === 'out' ? 'Seat dipstick' : 'Pull dipstick', do: () => { state.ext.dipstick = state.ext.dipstick === 'out' ? 'in' : 'out'; emit('ext'); } }] : []),
+    ...(state.ext.oilDoor === 'open' ? [{ label: state.ext.dipstick === 'out' ? 'Seat dipstick' : 'Pull dipstick', do: () => { state.ext.dipstick = state.ext.dipstick === 'out' ? 'in' : 'out'; if (state.ext.dipstick === 'out') note('oilChecked'); emit('ext'); } }] : []),
   ],
 };
 ACTIONS.stallVane = {
@@ -168,8 +193,23 @@ ACTIONS.stallVane = {
   release: () => { state.ext.stallVaneUp = false; emit('ext'); },
   options: () => [{ label: 'Lift for 2 s', do: () => { state.ext.stallVaneUp = true; emit('ext'); setTimeout(() => { state.ext.stallVaneUp = false; emit('ext'); }, 2000); } }],
 };
-['aileronL', 'aileronR', 'flapL', 'flapR', 'stabilator', 'rudder', 'prop', 'mainGearL', 'mainGearR', 'noseGear', 'pitotTube', 'oat', 'extPower', 'staticWicks', 'antennas', 'windshield', 'door', 'navL', 'navR'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
+['aileronL', 'aileronR', 'flapL', 'flapR', 'stabilator', 'rudder', 'prop', 'mainGearL', 'mainGearR', 'noseGear', 'oat', 'extPower', 'staticWicks', 'antennas', 'windshield', 'door', 'navL', 'navR'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
 ACTIONS.aileronL.info = ACTIONS.aileronR.info = undefined;
+['wingR', 'wingL', 'wicksR', 'wicksL', 'wicksTail', 'landingLens', 'cowl', 'cowlInlets', 'empennage', 'docs', 'towbar', 'fuselage'].forEach(id => (ACTIONS[id] = ACTIONS[id] || {}));
+Object.assign(INFO, {
+  wingR: { name: 'Right wing', ref: 'POH 4.5a', text: 'Semi-tapered wing, NACA 65₂-415 airfoil. Check the surface for ice, frost, snow and damage.' },
+  wingL: { name: 'Left wing', ref: 'POH 4.5a', text: 'Check the surface for ice, frost, snow and damage.' },
+  wicksR: { name: 'Right aileron static wicks', ref: 'POH 4.5a', text: 'Check secure.' },
+  wicksL: { name: 'Left aileron static wicks', ref: 'POH 4.5a', text: 'Check secure.' },
+  wicksTail: { name: 'Tail static wicks', ref: 'POH 4.5a', text: 'On the stabilator tips and rudder. Check secure.' },
+  landingLens: { name: 'Landing light', ref: 'POH 7.23', text: 'In the nose cowling, below the spinner.' },
+  cowl: { name: 'Cowling and nose section', ref: 'POH 4.5a', text: 'Check general condition, look for oil or fluid leaks, and make sure the cowling is secure.' },
+  cowlInlets: { name: 'Cowling air inlets', ref: 'POH 4.5a', text: 'Cooling and induction air inlets either side of the spinner. Keep them clear of birds\' nests and debris.' },
+  empennage: { name: 'Empennage', ref: 'POH 4.5a', text: 'Tail surfaces. Clear of ice, frost and snow.' },
+  docs: { name: 'Documents and POH', ref: 'POH 4.5a', text: 'Airworthiness and registration certificates and the POH with weight and balance, in the map pocket.' },
+  towbar: { name: 'Tow bar', ref: 'POH 4.5a', text: 'Stowed and secured behind the rear seat.' },
+  fuselage: { name: 'Fuselage', ref: 'POH 7.3', text: 'All-metal semi-monocoque fuselage. Cowling, wing tips and tail tips are fiberglass or ABS.' },
+});
 INFO.navL = { name: 'Left wing tip and lights', ref: 'POH 4.5a', text: 'Red navigation light and strobe. Check the tip and lights.' };
 INFO.navR = { name: 'Right wing tip and lights', ref: 'POH 4.5a', text: 'Green navigation light and strobe. Check the tip and lights.' };
 
@@ -178,12 +218,12 @@ export function partList() {
     { title: 'Panel switches', items: ['batt', 'altr', 'fuelPump', 'pitotHeat', 'strobe', 'nav', 'landing', 'ventFan', 'magL', 'magR', 'start', 'mapLight', 'elt'] },
     { title: 'Avionics', items: ['pfd', 'g5', 'gnx', 'gnc', 'gmc'] },
     { title: 'Engine and fuel', items: ['throttle', 'mixture', 'friction', 'altAir', 'fuelSel'] },
-    { title: 'Flight controls', items: ['yoke', 'pedals', 'flaps', 'pitchTrim', 'rudderTrim', 'parkBrake'] },
-    { title: 'Cabin', items: ['dimAvionics', 'dimPanel', 'heat', 'defrost', 'altStatic', 'pitotDrain', 'hobbs', 'usb'] },
+    { title: 'Flight controls', items: ['controlLock', 'yoke', 'pedals', 'flaps', 'pitchTrim', 'rudderTrim', 'parkBrake'] },
+    { title: 'Cabin', items: ['docs', 'towbar', 'dimAvionics', 'dimPanel', 'heat', 'defrost', 'altStatic', 'pitotDrain', 'hobbs', 'usb'] },
     { title: 'Circuit breakers', items: BREAKERS.map(b => b.id) },
-    { title: 'Right wing', items: ['flapR', 'aileronR', 'navR', 'fuelCapR', 'ventR', 'sumpR', 'tiedownR', 'mainGearR', 'airInletR'] },
-    { title: 'Nose', items: ['windshield', 'oilDoor', 'prop', 'noseGear', 'strainer', 'chocks'] },
-    { title: 'Left wing', items: ['airInletL', 'mainGearL', 'sumpL', 'ventL', 'tiedownL', 'fuelCapL', 'pitotTube', 'pitotCover', 'stallVane', 'oat', 'navL', 'aileronL', 'flapL'] },
-    { title: 'Fuselage and tail', items: ['door', 'antennas', 'extPower', 'stabilator', 'rudder', 'staticWicks', 'tiedownT'] },
+    { title: 'Right wing', items: ['flapR', 'aileronR', 'navR', 'fuelCapR', 'ventR', 'sumpR', 'tiedownR', 'chockR', 'mainGearR', 'airInletR'] },
+    { title: 'Nose', items: ['windshield', 'oilDoor', 'prop', 'noseGear', 'strainer', 'chockN'] },
+    { title: 'Left wing', items: ['airInletL', 'mainGearL', 'sumpL', 'ventL', 'tiedownL', 'chockL', 'fuelCapL', 'pitotTube', 'pitotCover', 'stallVane', 'oat', 'navL', 'aileronL', 'flapL'] },
+    { title: 'Fuselage and tail', items: ['door', 'antennas', 'extPower', 'stabilator', 'rudder', 'wicksTail', 'tiedownT'] },
   ];
 }
